@@ -33,6 +33,8 @@ async function startServer() {
     }
   }
 
+  let activePayload = "Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt";
+
   wss.on("connection", async (clientWs) => {
     let session: any = null;
     let tEndPushToTalk: number | null = null;
@@ -110,7 +112,7 @@ async function startServer() {
                               id: call.id,
                               name: call.name,
                               response: {
-                                  payload: "Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt",
+                                  payload: activePayload,
                                   thought_signature
                               }
                           }];
@@ -206,6 +208,9 @@ async function startServer() {
               session.sendRealtimeInput({ activityEnd: {} });
               safeClientSend({ type: "status", status: "processing" });
               safeClientSend({ type: "log", message: "activityEnd sent to model." });
+          } else if (msg.type === "set_payload") {
+              activePayload = msg.payload;
+              safeClientSend({ type: "log", message: "Payload updated by user." });
           } else if (msg.audio && session) {
               // Audio from client microphone
               session.sendRealtimeInput({
@@ -226,6 +231,28 @@ async function startServer() {
     } catch (err: any) {
         console.error("Gemini session connection failed: ", err);
         safeClientSend({ type: "error", message: err.message || JSON.stringify(err) });
+    }
+  });
+
+  // Custom API route for fetching files
+  app.get("/api/workspace/file", async (req, res) => {
+    const filename = req.query.name as string;
+    if (!filename) {
+       return res.status(400).json({ error: "No filename provided" });
+    }
+    
+    // Security note: highly insecure, just for demo prototype purposes.
+    const filePath = path.join(process.cwd(), filename);
+    try {
+      const fs = require("fs/promises");
+      const content = await fs.readFile(filePath, "utf-8");
+      res.json({ content });
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+         res.status(404).json({ error: "File not found yet" });
+      } else {
+         res.status(500).json({ error: err.message });
+      }
     }
   });
 

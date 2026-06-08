@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Mic, Play, Square, Loader2 } from 'lucide-react';
+import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save } from 'lucide-react';
 import { motion } from 'motion/react';
 
 function pcmToBase64(float32Array: Float32Array): string {
@@ -36,6 +36,12 @@ export default function App() {
   const [transcripts, setTranscripts] = useState<{role: 'user' | 'agent', text: string}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
+  const [activeTab, setActiveTab] = useState<'terminal' | 'payload' | 'workspace'>('terminal');
+  const [payloadText, setPayloadText] = useState("Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt");
+  const [workspaceFile, setWorkspaceFile] = useState("ouroboros_test.txt");
+  const [workspaceContent, setWorkspaceContent] = useState<string | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [fetchingFile, setFetchingFile] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -128,6 +134,34 @@ export default function App() {
     } catch (e: any) {
       addLog(`Failed to connect: ${e.message}`);
       setConnecting(false);
+    }
+  };
+
+  const fetchWorkspaceFile = async () => {
+     setFetchingFile(true);
+     setWorkspaceError(null);
+     setWorkspaceContent(null);
+     try {
+       const res = await fetch(`/api/workspace/file?name=${encodeURIComponent(workspaceFile)}`);
+       const data = await res.json();
+       if (res.ok) {
+          setWorkspaceContent(data.content);
+       } else {
+          setWorkspaceError(data.error);
+       }
+     } catch (err: any) {
+       setWorkspaceError(err.message);
+     } finally {
+       setFetchingFile(false);
+     }
+  };
+
+  const savePayload = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+       wsRef.current.send(JSON.stringify({ type: "set_payload", payload: payloadText }));
+       addLog("Payload updated on server.");
+    } else {
+       addLog("Cannot save payload: WebSocket disconnected.");
     }
   };
 
@@ -262,72 +296,131 @@ export default function App() {
         </header>
 
         <main className="flex-1 flex flex-col lg:flex-row gap-6 lg:gap-12 min-h-0">
-          {/* Left Column: Transcript & Terminal Logs */}
+          {/* Left Column: Content Area */}
           <div className="flex-1 flex flex-col gap-6 overflow-hidden">
-            {/* Component State Visualizer */}
-            <div className="h-24 flex items-center gap-1 border-b border-[#E5E5E5] pb-6 shrink-0">
-              {Array.from({ length: 8 }).map((_, i) => {
-                 let hClass = "h-4";
-                 let colorClass = "bg-[#121212] opacity-20";
-                 
-                 if (modelStatus === "speaking" || pushing) {
-                    const heights = ["h-8", "h-12", "h-16", "h-20", "h-14", "h-10", "h-6", "h-8"];
-                    hClass = heights[i];
-                    colorClass = pushing ? "bg-[#FF4500]" : "bg-[#0047AB]";
-                 } else if (modelStatus === "processing" || modelStatus === "fetching_payload" || modelStatus === "executing_code") {
-                    const heights = ["h-6", "h-8", "h-10", "h-12", "h-10", "h-8", "h-6", "h-6"];
-                    hClass = heights[i];
-                    colorClass = "bg-[#0047AB] opacity-50"; 
-                 }
-                 
-                 // Add simple CSS animation based on state
-                 const animation = (modelStatus === "speaking" || pushing || modelStatus !== "idle") ? `pulse ${0.5 + (i * 0.1)}s infinite alternate` : 'none';
-
-                 return <div key={i} className={`w-1 transition-all duration-300 ${hClass} ${colorClass}`} style={{ animation }} />
-              })}
-              
-              <div className="ml-4 flex flex-col gap-1 text-[10px] uppercase tracking-widest font-bold">
-                 <span>16kHz / 16-bit PCM / Mic Input</span>
-                 {pushing && <span className="text-[#FF4500]">Recording Activity...</span>}
-                 {!pushing && modelStatus === "processing" && <span className="text-[#0047AB]">Model Processing...</span>}
-                 {!pushing && modelStatus === "fetching_payload" && <span className="text-[#0047AB]">Tool Call: fetch_payload()</span>}
-                 {!pushing && modelStatus === "executing_code" && <span className="text-[#0047AB]">Tool Call: execute_code()</span>}
-                 {!pushing && modelStatus === "speaking" && <span className="text-[#0047AB]">Model Speaking...</span>}
-                 {!pushing && modelStatus === "idle" && <span className="text-[#666]">Idle / Listening</span>}
-              </div>
+            
+            {/* Tabs */}
+            <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0">
+               <button onClick={() => setActiveTab('terminal')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'terminal' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Terminal className="w-3 h-3" /> Terminal
+               </button>
+               <button onClick={() => setActiveTab('payload')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'payload' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Code className="w-3 h-3" /> Payload
+               </button>
+               <button onClick={() => setActiveTab('workspace')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'workspace' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Folder className="w-3 h-3" /> Workspace
+               </button>
             </div>
 
-            <div className="flex flex-col gap-6 overflow-hidden h-full">
-              <div className="flex gap-4 shrink-0 h-1/3 min-h-[150px]">
-                 <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Transcript</span>
-                 <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
-                    {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
-                    {transcripts.map((t, i) => (
-                       <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
-                          <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
-                          <span>{t.text ? `"${t.text}"` : ""}</span>
-                       </div>
-                    ))}
-                 </div>
-              </div>
+            {activeTab === 'terminal' && (
+               <div className="flex flex-col gap-6 overflow-hidden h-full">
+                 {/* Component State Visualizer */}
+                 <div className="h-24 flex items-center gap-1 border-b border-[#E5E5E5] pb-6 shrink-0">
+                   {Array.from({ length: 8 }).map((_, i) => {
+                      let hClass = "h-4";
+                      let colorClass = "bg-[#121212] opacity-20";
+                      
+                      if (modelStatus === "speaking" || pushing) {
+                         const heights = ["h-8", "h-12", "h-16", "h-20", "h-14", "h-10", "h-6", "h-8"];
+                         hClass = heights[i];
+                         colorClass = pushing ? "bg-[#FF4500]" : "bg-[#0047AB]";
+                      } else if (modelStatus === "processing" || modelStatus === "fetching_payload" || modelStatus === "executing_code") {
+                         const heights = ["h-6", "h-8", "h-10", "h-12", "h-10", "h-8", "h-6", "h-6"];
+                         hClass = heights[i];
+                         colorClass = "bg-[#0047AB] opacity-50"; 
+                      }
+                      
+                      const animation = (modelStatus === "speaking" || pushing || modelStatus !== "idle") ? `pulse ${0.5 + (i * 0.1)}s infinite alternate` : 'none';
 
-              <div className="flex gap-4 flex-1 overflow-hidden">
-                 <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Execution</span>
-                 <div className="bg-white border border-[#E5E5E5] p-4 lg:p-6 w-full font-mono text-[11px] lg:text-[13px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
-                    {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
-                    {logs.map((L, i) => {
-                       const isTool = L.includes("Tool");
-                       const isPayload = L.includes("Payload");
-                       return (
-                         <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
-                            {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
-                            <span>{L}</span>
-                         </div>
-                       )
-                    })}
+                      return <div key={i} className={`w-1 transition-all duration-300 ${hClass} ${colorClass}`} style={{ animation }} />
+                   })}
+                   
+                   <div className="ml-4 flex flex-col gap-1 text-[10px] uppercase tracking-widest font-bold">
+                      <span>16kHz / 16-bit PCM / Mic Input</span>
+                      {pushing && <span className="text-[#FF4500]">Recording Activity...</span>}
+                      {!pushing && modelStatus === "processing" && <span className="text-[#0047AB]">Model Processing...</span>}
+                      {!pushing && modelStatus === "fetching_payload" && <span className="text-[#0047AB]">Tool Call: fetch_payload()</span>}
+                      {!pushing && modelStatus === "executing_code" && <span className="text-[#0047AB]">Tool Call: execute_code()</span>}
+                      {!pushing && modelStatus === "speaking" && <span className="text-[#0047AB]">Model Speaking...</span>}
+                      {!pushing && modelStatus === "idle" && <span className="text-[#666]">Idle / Listening</span>}
+                   </div>
                  </div>
-              </div>
-            </div>
+
+                 <div className="flex gap-4 shrink-0 h-1/3 min-h-[150px]">
+                    <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Transcript</span>
+                    <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
+                       {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
+                       {transcripts.map((t, i) => (
+                          <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
+                             <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
+                             <span>{t.text ? `"${t.text}"` : ""}</span>
+                          </div>
+                       ))}
+                    </div>
+                 </div>
+
+                 <div className="flex gap-4 flex-1 overflow-hidden">
+                    <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Execution</span>
+                    <div className="bg-white border border-[#E5E5E5] p-4 lg:p-6 w-full font-mono text-[11px] lg:text-[13px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
+                       {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
+                       {logs.map((L, i) => {
+                          const isTool = L.includes("Tool");
+                          const isPayload = L.includes("Payload");
+                          return (
+                            <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
+                               {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
+                               <span>{L}</span>
+                            </div>
+                          )
+                       })}
+                    </div>
+                 </div>
+               </div>
+            )}
+
+            {activeTab === 'payload' && (
+               <div className="flex flex-col gap-4 overflow-hidden h-full">
+                  <div className="flex justify-between items-center shrink-0">
+                     <p className="text-xs text-[#666]">Define the instructions the agent receives when it fetches the payload.</p>
+                     <button onClick={savePayload} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors">
+                        <Save className="w-3 h-3" /> Save to Server
+                     </button>
+                  </div>
+                  <textarea 
+                     value={payloadText}
+                     onChange={(e) => setPayloadText(e.target.value)}
+                     className="w-full flex-1 bg-white border border-[#E5E5E5] p-4 font-mono text-sm leading-relaxed shadow-sm resize-none focus:outline-none focus:border-[#121212]"
+                     placeholder="Enter exact system instructions the model should execute..."
+                  />
+               </div>
+            )}
+
+            {activeTab === 'workspace' && (
+               <div className="flex flex-col gap-4 overflow-hidden h-full">
+                  <div className="flex gap-2 isolate shrink-0">
+                     <input 
+                       className="flex-1 border border-[#E5E5E5] px-4 py-2 text-sm focus:outline-none focus:border-[#121212] font-mono shadow-sm bg-white"
+                       value={workspaceFile}
+                       onChange={e => setWorkspaceFile(e.target.value)}
+                       placeholder="Filename (e.g., ouroboros_test.txt)"
+                     />
+                     <button onClick={fetchWorkspaceFile} disabled={fetchingFile} className="bg-[#121212] text-white px-6 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
+                        {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Fetch
+                     </button>
+                  </div>
+
+                  <div className="flex-1 bg-white border border-[#E5E5E5] p-6 shadow-sm overflow-y-auto relative">
+                     {workspaceError ? (
+                        <div className="text-[#FF4500] font-mono text-sm">{workspaceError}</div>
+                     ) : workspaceContent !== null ? (
+                        <pre className="font-mono text-sm text-[#121212] whitespace-pre-wrap">{workspaceContent}</pre>
+                     ) : (
+                        <div className="text-[#999] italic absolute inset-0 flex items-center justify-center">Enter a filename and click fetch.</div>
+                     )}
+                  </div>
+               </div>
+            )}
+            
           </div>
 
           {/* Right Column: Metrics & Controls */}
