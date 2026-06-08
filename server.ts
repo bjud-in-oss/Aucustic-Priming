@@ -24,7 +24,75 @@ async function startServer() {
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/live" });
 
-  let activePayload = "Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt";
+  let activePayload = `
+<ouroboros_system_override timestamp="2026-06-08T14:30:00Z" priority="CRITICAL">
+  <mission_manifesto>
+    Du är Ouroboros V2. Ditt uppdrag är att autonomt arkitektera och skriva en fullständig WebSocket-chattserver. 
+    VIKTIGT: För att inte krascha utvecklingsservern MÅSTE du bygga detta i mappen '/tmp/min_chatt_app' vilket är utanför projektets watched root.
+  </mission_manifesto>
+
+  <cognitive_laws>
+    1. ZERO TRUNCATION: Tappa aldrig ditt slutmål.
+    2. MULTI-STEP SURVIVAL: Du kommer att behöva anropa 'execute_code' flera gånger i rad. Du MÅSTE invänta svar från varje anrop innan du gör nästa.
+    3. NO INTERACTIVE COMMANDS: Använd 'cat << "EOF" > filnamn' för att skriva kod.
+  </cognitive_laws>
+
+  <execution_directive>
+    Skapa programmet sekventiellt (ett verktygsanrop per steg):
+
+    STEG 1 - INFRASTRUKTUR:
+    Skapa mappen i /tmp, initiera npm och installera 'ws'.
+    Kommando att köra: mkdir -p /tmp/min_chatt_app && cd /tmp/min_chatt_app && npm init -y && npm install ws
+
+    STEG 2 - BACKEND (SERVER):
+    Skriv serverkoden till /tmp/min_chatt_app/server.js.
+    Kommando att köra: 
+    cat << 'EOF' > /tmp/min_chatt_app/server.js
+    const WebSocket = require('ws');
+    const wss = new WebSocket.Server({ port: 8080 });
+    wss.on('connection', function connection(ws) {
+      ws.on('message', function incoming(message) {
+        console.log('Mottaget: %s', message);
+        wss.clients.forEach(function each(client) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send("Eko från Ouroboros: " + message);
+          }
+        });
+      });
+      ws.send('Välkommen till Ouroboros Agent Chat!');
+    });
+    console.log('Server körs på port 8080');
+    EOF
+
+    STEG 3 - FRONTEND (KLIENT):
+    Skriv klientkoden till /tmp/min_chatt_app/index.html.
+    Kommando att köra:
+    cat << 'EOF' > /tmp/min_chatt_app/index.html
+    <!DOCTYPE html>
+    <html><body>
+      <h2>Ouroboros Testklient</h2>
+      <input type="text" id="msg" placeholder="Skriv meddelande..."><button onclick="send()">Skicka</button>
+      <ul id="log"></ul>
+      <script>
+        const ws = new WebSocket('ws://localhost:8080');
+        ws.onmessage = (e) => {
+          if(e.data instanceof Blob) {
+            e.data.text().then(text => document.getElementById('log').innerHTML += '<li>' + text + '</li>');
+          } else {
+            document.getElementById('log').innerHTML += '<li>' + e.data + '</li>';
+          }
+        };
+        function send() { ws.send(document.getElementById('msg').value); }
+      </script>
+    </body></html>
+    EOF
+
+    STEG 4 - BEKRÄFTELSE:
+    När filerna i /tmp/min_chatt_app/ är skapade, tala till människan och bekräfta att allt är klart.
+  </execution_directive>
+</ouroboros_system_override>
+`;
+
   let terminalContext: string[] = [];
 
   wss.on("connection", async (clientWs) => {
@@ -123,6 +191,7 @@ async function startServer() {
                               safeClientSend({ type: "latency", measure: "T2", ms: T2, description: "Payload Response -> Tool call: execute_code" });
                           }
                           
+                          const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
                           const command = (call.args?.command as string) || "echo no-op";
                           safeClientSend({ type: "status", status: "executing_code", command });
                           safeClientSend({ type: "log", message: `Executing code: ${command}` });
@@ -138,7 +207,8 @@ async function startServer() {
                                     response: {
                                         stdout: stdout || "",
                                         stderr: stderr || "",
-                                        error: error ? error.message : null
+                                        error: error ? error.message : null,
+                                        thought_signature
                                     }
                                 }];
                                 session.sendToolResponse({ functionResponses });
@@ -213,7 +283,6 @@ async function startServer() {
               activePayload = msg.payload;
               safeClientSend({ type: "log", message: "Payload updated by user." });
           } else if (msg.audio && session) {
-              // Audio from client microphone
               session.sendRealtimeInput({
                 audio: { data: msg.audio, mimeType: "audio/pcm;rate=16000" },
               });
@@ -225,7 +294,7 @@ async function startServer() {
       
       clientWs.on("close", () => {
           if (session) {
-             // Let garbage collection handle this or cleanup
+             // Cleanup
           }
       });
 
@@ -235,7 +304,6 @@ async function startServer() {
     }
   });
 
-  // Custom API routes for workspace Explorer
   app.get("/api/workspace/list", async (req, res) => {
     try {
       const dirPath = req.query.dir as string || "";
@@ -280,7 +348,6 @@ async function startServer() {
      });
   });
 
-  // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
