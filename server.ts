@@ -6,6 +6,7 @@ import { GoogleGenAI, LiveServerMessage, Modality, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import { exec } from "child_process";
 import * as path from "path";
+import fs from "fs/promises";
 
 const PORT = 3000;
 
@@ -237,7 +238,6 @@ async function startServer() {
   // Custom API routes for workspace Explorer
   app.get("/api/workspace/list", async (req, res) => {
     try {
-      const fs = require("fs/promises");
       const cwd = process.cwd();
       const items = await fs.readdir(cwd, { withFileTypes: true });
 
@@ -260,7 +260,6 @@ async function startServer() {
      if (!filename) {
         return res.status(400).json({ error: "No filename provided" });
      }
-     const path = require("path");
      const filePath = path.join(process.cwd(), filename);
      res.download(filePath, (err) => {
         if (err) {
