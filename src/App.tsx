@@ -295,9 +295,9 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 flex flex-col lg:flex-row gap-6 lg:gap-12 min-h-0">
+        <main className="flex-1 flex flex-col lg:flex-row gap-6 lg:gap-12 min-h-0 overflow-y-auto lg:overflow-hidden">
           {/* Left Column: Content Area */}
-          <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+          <div className="lg:flex-1 flex flex-col gap-6 lg:overflow-hidden flex-shrink-0 lg:flex-shrink">
             
             {/* Tabs */}
             <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0">
@@ -313,7 +313,7 @@ export default function App() {
             </div>
 
             {activeTab === 'terminal' && (
-               <div className="flex flex-col gap-6 overflow-hidden h-full">
+               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
                  {/* Component State Visualizer */}
                  <div className="h-24 flex items-center gap-1 border-b border-[#E5E5E5] pb-6 shrink-0">
                    {Array.from({ length: 8 }).map((_, i) => {
@@ -379,7 +379,7 @@ export default function App() {
             )}
 
             {activeTab === 'payload' && (
-               <div className="flex flex-col gap-4 overflow-hidden h-full">
+               <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
                   <div className="flex justify-between items-center shrink-0">
                      <p className="text-xs text-[#666]">Define the instructions the agent receives when it fetches the payload.</p>
                      <button onClick={savePayload} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors">
@@ -396,7 +396,7 @@ export default function App() {
             )}
 
             {activeTab === 'workspace' && (
-               <div className="flex flex-col gap-4 overflow-hidden h-full">
+               <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
                   <div className="flex gap-2 isolate shrink-0">
                      <input 
                        className="flex-1 border border-[#E5E5E5] px-4 py-2 text-sm focus:outline-none focus:border-[#121212] font-mono shadow-sm bg-white"
@@ -424,7 +424,7 @@ export default function App() {
           </div>
 
           {/* Right Column: Metrics & Controls */}
-          <aside className="lg:w-80 flex flex-col lg:border-l border-[#121212] lg:pl-12 shrink-0 overflow-y-auto w-full">
+          <aside className="lg:w-80 flex flex-col lg:border-l border-[#121212] lg:pl-12 shrink-0 lg:overflow-y-auto w-full">
              <div className="mb-8 lg:mb-12 mt-4 lg:mt-0">
                <h2 className="text-xs font-bold uppercase tracking-widest mb-6 border-b border-[#121212] pb-2">Telemetry Logs</h2>
                

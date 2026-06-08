@@ -23,19 +23,19 @@ async function startServer() {
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/live" });
 
-  function safeClientSend(payload: any) {
-    if (clientWs.readyState === 1) { // 1 is OPEN
-      try {
-        clientWs.send(JSON.stringify(payload));
-      } catch (err) {
-        console.error("Failed to send message to client:", err);
-      }
-    }
-  }
-
   let activePayload = "Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt";
 
   wss.on("connection", async (clientWs) => {
+    function safeClientSend(payload: any) {
+      if (clientWs.readyState === 1) { // 1 is OPEN
+        try {
+          clientWs.send(JSON.stringify(payload));
+        } catch (err) {
+          console.error("Failed to send message to client:", err);
+        }
+      }
+    }
+
     let session: any = null;
     let tEndPushToTalk: number | null = null;
     let tFetchPayloadSent: number | null = null;
@@ -45,16 +45,6 @@ async function startServer() {
       session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         callbacks: {
-          onsetupcomplete: () => {
-             safeClientSend({ type: "log", message: "Gemini session setup complete." });
-          },
-          onclose: () => {
-             safeClientSend({ type: "log", message: "Gemini session closed." });
-             safeClientSend({ type: "status", status: "idle" });
-          },
-          onerror: (error: any) => {
-             safeClientSend({ type: "error", message: `Gemini error: ${error.message || JSON.stringify(error)}` });
-          },
           onmessage: (message: LiveServerMessage) => {
             try {
               // Forward audio to frontend
