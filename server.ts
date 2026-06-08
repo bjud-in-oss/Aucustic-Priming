@@ -24,6 +24,7 @@ async function startServer() {
   const wss = new WebSocketServer({ server, path: "/live" });
 
   let activePayload = "Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt";
+  let terminalContext: string[] = [];
 
   wss.on("connection", async (clientWs) => {
     function safeClientSend(payload: any) {
@@ -98,11 +99,16 @@ async function startServer() {
 
                           safeClientSend({ type: "status", status: "fetching_payload" });
 
+                          let contextualPayload = activePayload;
+                          if (terminalContext.length > 0) {
+                              contextualPayload += "\n\n=== RECENT TERMINAL LOGS ===\n" + terminalContext.slice(-5).join("\n---\n") + "\n============================\n";
+                          }
+
                           const functionResponses = [{
                               id: call.id,
                               name: call.name,
                               response: {
-                                  payload: activePayload,
+                                  payload: contextualPayload,
                                   thought_signature
                               }
                           }];
@@ -122,6 +128,9 @@ async function startServer() {
                           
                           exec(command, (error, stdout, stderr) => {
                               try {
+                                const resultStr = `Command: ${command}\nStdout: ${stdout || ""}\nStderr: ${stderr || ""}\nError: ${error ? error.message : null}`;
+                                terminalContext.push(resultStr);
+
                                 const functionResponses = [{
                                     id: call.id,
                                     name: call.name,
@@ -134,6 +143,7 @@ async function startServer() {
                                 session.sendToolResponse({ functionResponses });
                                 tExecuteFinish = Date.now();
                                 safeClientSend({ type: "log", message: `Execution completed.` });
+                                safeClientSend({ type: "execution_output", command, stdout: stdout || "", stderr: stderr || "", error: error ? error.message : null });
                               } catch (innerErr) {
                                 console.error("Error sending tool response:", innerErr);
                               }
@@ -224,26 +234,39 @@ async function startServer() {
     }
   });
 
-  // Custom API route for fetching files
-  app.get("/api/workspace/file", async (req, res) => {
-    const filename = req.query.name as string;
-    if (!filename) {
-       return res.status(400).json({ error: "No filename provided" });
-    }
-    
-    // Security note: highly insecure, just for demo prototype purposes.
-    const filePath = path.join(process.cwd(), filename);
+  // Custom API routes for workspace Explorer
+  app.get("/api/workspace/list", async (req, res) => {
     try {
       const fs = require("fs/promises");
-      const content = await fs.readFile(filePath, "utf-8");
-      res.json({ content });
+      const cwd = process.cwd();
+      const items = await fs.readdir(cwd, { withFileTypes: true });
+
+      const ignored = ['node_modules', '.git', 'dist', '.env', '.env.example', '.nvmrc'];
+      const files = items
+          .filter((item: any) => !ignored.includes(item.name) && !item.name.startsWith('.'))
+          .map((item: any) => ({
+              name: item.name,
+              isDirectory: item.isDirectory(),
+          }));
+
+      res.json({ files });
     } catch (err: any) {
-      if (err.code === "ENOENT") {
-         res.status(404).json({ error: "File not found yet" });
-      } else {
-         res.status(500).json({ error: err.message });
-      }
+      res.status(500).json({ error: err.message });
     }
+  });
+
+  app.get("/api/workspace/download", (req, res) => {
+     const filename = req.query.name as string;
+     if (!filename) {
+        return res.status(400).json({ error: "No filename provided" });
+     }
+     const path = require("path");
+     const filePath = path.join(process.cwd(), filename);
+     res.download(filePath, (err) => {
+        if (err) {
+           if (!res.headersSent) res.status(404).json({ error: "File not found" });
+        }
+     });
   });
 
   // Vite middleware for development

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save } from 'lucide-react';
+import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download } from 'lucide-react';
 import { motion } from 'motion/react';
 
 function pcmToBase64(float32Array: Float32Array): string {
@@ -34,12 +34,12 @@ export default function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [latencies, setLatencies] = useState<LatencyLog[]>([]);
   const [transcripts, setTranscripts] = useState<{role: 'user' | 'agent', text: string}[]>([]);
+  const [executionOutputs, setExecutionOutputs] = useState<{command: string, stdout: string, stderr: string, error: string | null}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
-  const [activeTab, setActiveTab] = useState<'terminal' | 'payload' | 'workspace'>('terminal');
+  const [activeTab, setActiveTab] = useState<'terminal' | 'output' | 'payload' | 'workspace'>('terminal');
   const [payloadText, setPayloadText] = useState("Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt");
-  const [workspaceFile, setWorkspaceFile] = useState("ouroboros_test.txt");
-  const [workspaceContent, setWorkspaceContent] = useState<string | null>(null);
+  const [workspaceItems, setWorkspaceItems] = useState<{name: string, isDirectory: boolean}[]>([]);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [fetchingFile, setFetchingFile] = useState(false);
   
@@ -98,6 +98,9 @@ export default function App() {
            } else if (msg.status !== "executing_code") {
               setActiveCommand("");
            }
+        } else if (msg.type === "execution_output") {
+           setExecutionOutputs(prev => [...prev, { command: msg.command, stdout: msg.stdout, stderr: msg.stderr, error: msg.error }]);
+           setActiveTab('output'); // auto-switch to output
         } else if (msg.type === "interrupted") {
            addLog("Agent interrupted.");
            nextStartTimeRef.current = audioCtxRef.current!.currentTime;
@@ -137,15 +140,14 @@ export default function App() {
     }
   };
 
-  const fetchWorkspaceFile = async () => {
+  const loadWorkspace = async () => {
      setFetchingFile(true);
      setWorkspaceError(null);
-     setWorkspaceContent(null);
      try {
-       const res = await fetch(`/api/workspace/file?name=${encodeURIComponent(workspaceFile)}`);
+       const res = await fetch(`/api/workspace/list`);
        const data = await res.json();
        if (res.ok) {
-          setWorkspaceContent(data.content);
+          setWorkspaceItems(data.files || []);
        } else {
           setWorkspaceError(data.error);
        }
@@ -155,6 +157,31 @@ export default function App() {
        setFetchingFile(false);
      }
   };
+
+  const downloadFile = async (filename: string) => {
+     try {
+       const res = await fetch(`/api/workspace/download?name=${encodeURIComponent(filename)}`);
+       if (!res.ok) throw new Error("Failed to download file");
+       const blob = await res.blob();
+       const url = window.URL.createObjectURL(blob);
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = filename;
+       document.body.appendChild(a);
+       a.click();
+       a.remove();
+       window.URL.revokeObjectURL(url);
+     } catch (err) {
+       console.error("Download error:", err);
+       alert("Could not download file.");
+     }
+  };
+
+  useEffect(() => {
+     if (activeTab === 'workspace') {
+        loadWorkspace();
+     }
+  }, [activeTab]);
 
   const savePayload = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -304,6 +331,9 @@ export default function App() {
                <button onClick={() => setActiveTab('terminal')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'terminal' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
                  <Terminal className="w-3 h-3" /> Terminal
                </button>
+               <button onClick={() => setActiveTab('output')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'output' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Code className="w-3 h-3" /> Output
+               </button>
                <button onClick={() => setActiveTab('payload')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'payload' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
                  <Code className="w-3 h-3" /> Payload
                </button>
@@ -378,6 +408,37 @@ export default function App() {
                </div>
             )}
 
+            {activeTab === 'output' && (
+               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
+                  <div className="flex justify-between items-center shrink-0">
+                     <p className="text-xs text-[#666]">Results of recent terminal executions by the agent.</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto flex flex-col gap-8 pr-4">
+                     {executionOutputs.length === 0 ? (
+                        <div className="text-[#999] italic mt-4 text-sm">No code has been executed yet.</div>
+                     ) : (
+                        executionOutputs.map((out, i) => (
+                           <div key={i} className="flex flex-col gap-2">
+                              <div className="font-mono text-xs bg-[#E5E5E5] px-3 py-1.5 inline-block w-fit font-bold rounded-sm">
+                                 $ {out.command}
+                              </div>
+                              {out.stdout && (
+                                 <pre className="bg-[#121212] text-white p-4 font-mono text-sm overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap">
+                                    {out.stdout}
+                                 </pre>
+                              )}
+                              {(out.stderr || out.error) && (
+                                 <pre className="bg-[#FF4500]/10 text-[#FF4500] border border-[#FF4500]/20 p-4 font-mono text-sm overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap">
+                                    {out.stderr || out.error}
+                                 </pre>
+                              )}
+                           </div>
+                        ))
+                     )}
+                  </div>
+               </div>
+            )}
+
             {activeTab === 'payload' && (
                <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
                   <div className="flex justify-between items-center shrink-0">
@@ -397,25 +458,47 @@ export default function App() {
 
             {activeTab === 'workspace' && (
                <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
-                  <div className="flex gap-2 isolate shrink-0">
-                     <input 
-                       className="flex-1 border border-[#E5E5E5] px-4 py-2 text-sm focus:outline-none focus:border-[#121212] font-mono shadow-sm bg-white"
-                       value={workspaceFile}
-                       onChange={e => setWorkspaceFile(e.target.value)}
-                       placeholder="Filename (e.g., ouroboros_test.txt)"
-                     />
-                     <button onClick={fetchWorkspaceFile} disabled={fetchingFile} className="bg-[#121212] text-white px-6 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
-                        {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Fetch
+                  <div className="flex justify-between items-center shrink-0">
+                     <p className="text-xs text-[#666]">Explore and download files in the project workspace.</p>
+                     <button onClick={loadWorkspace} disabled={fetchingFile} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
+                        {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Refresh
                      </button>
                   </div>
 
-                  <div className="flex-1 bg-white border border-[#E5E5E5] p-6 shadow-sm overflow-y-auto relative">
+                  <div className="flex-1 bg-white border border-[#E5E5E5] shadow-sm overflow-y-auto">
                      {workspaceError ? (
-                        <div className="text-[#FF4500] font-mono text-sm">{workspaceError}</div>
-                     ) : workspaceContent !== null ? (
-                        <pre className="font-mono text-sm text-[#121212] whitespace-pre-wrap">{workspaceContent}</pre>
+                        <div className="p-6 text-[#FF4500] font-mono text-sm">{workspaceError}</div>
+                     ) : workspaceItems.length === 0 ? (
+                        <div className="p-6 text-[#999] italic flex items-center justify-center h-full">Workspace is empty.</div>
                      ) : (
-                        <div className="text-[#999] italic absolute inset-0 flex items-center justify-center">Enter a filename and click fetch.</div>
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="border-b border-[#E5E5E5] text-[10px] uppercase tracking-widest text-[#666]">
+                              <th className="p-4 font-bold max-w-[200px]">Name</th>
+                              <th className="p-4 font-bold text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {workspaceItems.map((item, i) => (
+                              <tr key={i} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#F9F9F9] transition-colors group">
+                                <td className="p-4 flex items-center gap-3">
+                                  {item.isDirectory ? <Folder className="w-4 h-4 text-[#0047AB]" /> : <FileText className="w-4 h-4 text-[#666]" />}
+                                  <span className="font-mono text-sm text-[#121212] truncate max-w-[200px] lg:max-w-[400px]">{item.name}</span>
+                                </td>
+                                <td className="p-4 text-right">
+                                  {!item.isDirectory && (
+                                    <button 
+                                      onClick={() => downloadFile(item.name)}
+                                      className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-[#121212] text-[#121212] hover:bg-[#121212] hover:text-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                    >
+                                      <Download className="w-3 h-3" /> Download
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                      )}
                   </div>
                </div>
