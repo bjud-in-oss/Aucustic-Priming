@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download } from 'lucide-react';
+import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download, MessageSquare, Activity, Settings, ArrowLeft } from 'lucide-react';
 import { motion } from 'motion/react';
 
 function pcmToBase64(float32Array: Float32Array): string {
@@ -37,11 +37,12 @@ export default function App() {
   const [executionOutputs, setExecutionOutputs] = useState<{command: string, stdout: string, stderr: string, error: string | null}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
-  const [activeTab, setActiveTab] = useState<'terminal' | 'output' | 'payload' | 'workspace'>('terminal');
+  const [activeTab, setActiveTab] = useState<'transcript' | 'logs' | 'output' | 'input' | 'workspace'>('transcript');
   const [payloadText, setPayloadText] = useState("Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt");
-  const [workspaceItems, setWorkspaceItems] = useState<{name: string, isDirectory: boolean}[]>([]);
+  const [workspaceItems, setWorkspaceItems] = useState<{name: string, path: string, isDirectory: boolean}[]>([]);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [fetchingFile, setFetchingFile] = useState(false);
+  const [currentDir, setCurrentDir] = useState<string>("");
   
   const wsRef = useRef<WebSocket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -140,14 +141,15 @@ export default function App() {
     }
   };
 
-  const loadWorkspace = async () => {
+  const loadWorkspace = async (dir: string = currentDir) => {
      setFetchingFile(true);
      setWorkspaceError(null);
      try {
-       const res = await fetch(`/api/workspace/list`);
+       const res = await fetch(`/api/workspace/list?dir=${encodeURIComponent(dir)}`);
        const data = await res.json();
        if (res.ok) {
           setWorkspaceItems(data.files || []);
+          setCurrentDir(dir);
        } else {
           setWorkspaceError(data.error);
        }
@@ -158,15 +160,16 @@ export default function App() {
      }
   };
 
-  const downloadFile = async (filename: string) => {
+  const downloadFile = async (filepath: string) => {
      try {
-       const res = await fetch(`/api/workspace/download?name=${encodeURIComponent(filename)}`);
+       const res = await fetch(`/api/workspace/download?path=${encodeURIComponent(filepath)}`);
        if (!res.ok) throw new Error("Failed to download file");
        const blob = await res.blob();
        const url = window.URL.createObjectURL(blob);
        const a = document.createElement('a');
        a.href = url;
-       a.download = filename;
+       const parts = filepath.split('/');
+       a.download = parts[parts.length - 1];
        document.body.appendChild(a);
        a.click();
        a.remove();
@@ -175,6 +178,13 @@ export default function App() {
        console.error("Download error:", err);
        alert("Could not download file.");
      }
+  };
+
+  const navigateUp = () => {
+      if (!currentDir) return;
+      const parts = currentDir.split('/').filter(Boolean);
+      parts.pop();
+      loadWorkspace(parts.join('/'));
   };
 
   useEffect(() => {
@@ -298,27 +308,61 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-[100dvh] w-full bg-[#FAF9F6] text-[#121212] p-4 lg:p-8 font-sans overflow-hidden border-[8px] lg:border-[12px] border-white">
-        <header className="flex justify-between items-end border-b border-[#121212] pb-4 mb-4 lg:mb-8 shrink-0">
+        <header className="flex flex-col lg:flex-row justify-between items-start lg:items-end border-b border-[#121212] pb-6 mb-4 lg:mb-8 shrink-0 gap-6 lg:gap-0">
           <div className="max-w-xl">
              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#666] mb-2">Project: Ouroboros / Gemini-3.1-Flash-Live</p>
              <h1 className="text-4xl lg:text-7xl font-serif font-light leading-none tracking-tight">Acoustic Priming</h1>
           </div>
-          <div className="text-right flex flex-col items-end gap-2">
-            <div className={`flex items-center gap-2 text-xs font-mono uppercase ${connected ? 'text-[#0047AB]' : 'text-[#FF4500]'}`}>
-              <div className={`w-2 h-2 rounded-full ${connected ? 'bg-[#0047AB]' : 'bg-[#FF4500]'}`} />
-              {connected ? 'LIVE API ONLINE' : 'OFFLINE'}
-            </div>
-            {!connected ? (
-              <button onClick={connect} disabled={connecting} className="border border-[#121212] text-[#121212] px-4 py-1.5 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-[#121212] hover:text-white transition-colors disabled:opacity-50">
-                {connecting ? <Loader2 className="w-3 h-3 animate-spin"/> : <Play className="w-3 h-3" />}
-                Connect
-              </button>
-            ) : (
-              <button onClick={disconnect} className="bg-[#121212] text-white px-4 py-1.5 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors">
-                <Square className="w-3 h-3" />
-                Disconnect
-              </button>
-            )}
+          
+          <div className="flex flex-col lg:flex-row items-start lg:items-end gap-6 flex-1 lg:justify-end">
+             <div className="flex items-center gap-1 shrink-0">
+               {Array.from({ length: 8 }).map((_, i) => {
+                  let hClass = "h-4";
+                  let colorClass = "bg-[#121212] opacity-20";
+                  
+                  if (modelStatus === "speaking" || pushing) {
+                     const heights = ["h-8", "h-12", "h-16", "h-20", "h-14", "h-10", "h-6", "h-8"];
+                     hClass = heights[i];
+                     colorClass = pushing ? "bg-[#FF4500]" : "bg-[#0047AB]";
+                  } else if (modelStatus === "processing" || modelStatus === "fetching_payload" || modelStatus === "executing_code") {
+                     const heights = ["h-6", "h-8", "h-10", "h-12", "h-10", "h-8", "h-6", "h-6"];
+                     hClass = heights[i];
+                     colorClass = "bg-[#0047AB] opacity-50"; 
+                  }
+                  
+                  const animation = (modelStatus === "speaking" || pushing || modelStatus !== "idle") ? `pulse ${0.5 + (i * 0.1)}s infinite alternate` : 'none';
+
+                  return <div key={i} className={`w-1 transition-all duration-300 ${hClass} ${colorClass}`} style={{ animation }} />
+               })}
+               
+               <div className="ml-4 flex flex-col gap-0.5 text-[9px] uppercase tracking-widest font-bold">
+                  <span className="text-[#999]">Microphone Array</span>
+                  {pushing && <span className="text-[#FF4500]">Recording...</span>}
+                  {!pushing && modelStatus === "processing" && <span className="text-[#0047AB]">Processing...</span>}
+                  {!pushing && modelStatus === "fetching_payload" && <span className="text-[#0047AB]">VAD: Injection</span>}
+                  {!pushing && modelStatus === "executing_code" && <span className="text-[#0047AB]">VAD: Execute</span>}
+                  {!pushing && modelStatus === "speaking" && <span className="text-[#0047AB]">Speaking...</span>}
+                  {!pushing && modelStatus === "idle" && <span className="text-[#666]">Idle</span>}
+               </div>
+             </div>
+
+             <div className="text-right flex flex-col items-start lg:items-end gap-2">
+               <div className={`flex items-center gap-2 text-xs font-mono uppercase ${connected ? 'text-[#0047AB]' : 'text-[#FF4500]'}`}>
+                 <div className={`w-2 h-2 rounded-full ${connected ? 'bg-[#0047AB]' : 'bg-[#FF4500]'}`} />
+                 {connected ? 'LIVE API ONLINE' : 'OFFLINE'}
+               </div>
+               {!connected ? (
+                 <button onClick={connect} disabled={connecting} className="border border-[#121212] text-[#121212] px-4 py-1.5 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-[#121212] hover:text-white transition-colors disabled:opacity-50">
+                   {connecting ? <Loader2 className="w-3 h-3 animate-spin"/> : <Play className="w-3 h-3" />}
+                   Connect
+                 </button>
+               ) : (
+                 <button onClick={disconnect} className="bg-[#121212] text-white px-4 py-1.5 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors">
+                   <Square className="w-3 h-3" />
+                   Disconnect
+                 </button>
+               )}
+             </div>
           </div>
         </header>
 
@@ -327,84 +371,59 @@ export default function App() {
           <div className="lg:flex-1 flex flex-col gap-6 lg:overflow-hidden flex-shrink-0 lg:flex-shrink">
             
             {/* Tabs */}
-            <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0">
-               <button onClick={() => setActiveTab('terminal')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'terminal' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Terminal className="w-3 h-3" /> Terminal
+            <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0 overflow-x-auto whitespace-nowrap">
+               <button onClick={() => setActiveTab('transcript')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'transcript' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <MessageSquare className="w-3 h-3" /> Transcript
+               </button>
+               <button onClick={() => setActiveTab('logs')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'logs' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Activity className="w-3 h-3" /> System Logs
                </button>
                <button onClick={() => setActiveTab('output')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'output' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
                  <Code className="w-3 h-3" /> Output
                </button>
-               <button onClick={() => setActiveTab('payload')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'payload' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Code className="w-3 h-3" /> Payload
-               </button>
                <button onClick={() => setActiveTab('workspace')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'workspace' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
                  <Folder className="w-3 h-3" /> Workspace
                </button>
+               <button onClick={() => setActiveTab('input')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'input' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                 <Settings className="w-3 h-3" /> Input
+               </button>
             </div>
 
-            {activeTab === 'terminal' && (
+            {activeTab === 'transcript' && (
                <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
-                 {/* Component State Visualizer */}
-                 <div className="h-24 flex items-center gap-1 border-b border-[#E5E5E5] pb-6 shrink-0">
-                   {Array.from({ length: 8 }).map((_, i) => {
-                      let hClass = "h-4";
-                      let colorClass = "bg-[#121212] opacity-20";
-                      
-                      if (modelStatus === "speaking" || pushing) {
-                         const heights = ["h-8", "h-12", "h-16", "h-20", "h-14", "h-10", "h-6", "h-8"];
-                         hClass = heights[i];
-                         colorClass = pushing ? "bg-[#FF4500]" : "bg-[#0047AB]";
-                      } else if (modelStatus === "processing" || modelStatus === "fetching_payload" || modelStatus === "executing_code") {
-                         const heights = ["h-6", "h-8", "h-10", "h-12", "h-10", "h-8", "h-6", "h-6"];
-                         hClass = heights[i];
-                         colorClass = "bg-[#0047AB] opacity-50"; 
-                      }
-                      
-                      const animation = (modelStatus === "speaking" || pushing || modelStatus !== "idle") ? `pulse ${0.5 + (i * 0.1)}s infinite alternate` : 'none';
+                  <div className="flex justify-between items-center shrink-0">
+                     <p className="text-xs text-[#666]">Historic conversation dialogue.</p>
+                  </div>
+                  <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
+                     {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
+                     {transcripts.map((t, i) => (
+                        <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
+                           <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
+                           <span>{t.text ? `"${t.text}"` : ""}</span>
+                        </div>
+                     ))}
+                  </div>
+               </div>
+            )}
 
-                      return <div key={i} className={`w-1 transition-all duration-300 ${hClass} ${colorClass}`} style={{ animation }} />
-                   })}
-                   
-                   <div className="ml-4 flex flex-col gap-1 text-[10px] uppercase tracking-widest font-bold">
-                      <span>16kHz / 16-bit PCM / Mic Input</span>
-                      {pushing && <span className="text-[#FF4500]">Recording Activity...</span>}
-                      {!pushing && modelStatus === "processing" && <span className="text-[#0047AB]">Model Processing...</span>}
-                      {!pushing && modelStatus === "fetching_payload" && <span className="text-[#0047AB]">Tool Call: fetch_payload()</span>}
-                      {!pushing && modelStatus === "executing_code" && <span className="text-[#0047AB]">Tool Call: execute_code()</span>}
-                      {!pushing && modelStatus === "speaking" && <span className="text-[#0047AB]">Model Speaking...</span>}
-                      {!pushing && modelStatus === "idle" && <span className="text-[#666]">Idle / Listening</span>}
-                   </div>
-                 </div>
-
-                 <div className="flex gap-4 shrink-0 h-1/3 min-h-[150px]">
-                    <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Transcript</span>
-                    <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
-                       {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
-                       {transcripts.map((t, i) => (
-                          <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
-                             <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
-                             <span>{t.text ? `"${t.text}"` : ""}</span>
+            {activeTab === 'logs' && (
+               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
+                  <div className="flex justify-between items-center shrink-0">
+                     <p className="text-xs text-[#666]">Telemetry and tool execution tracking.</p>
+                  </div>
+                  <div className="bg-white border border-[#E5E5E5] p-4 lg:p-6 w-full font-mono text-[11px] lg:text-[13px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
+                     {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
+                     {logs.map((L, i) => {
+                        const isTool = L.includes("Tool");
+                        const isPayload = L.includes("Payload");
+                        return (
+                          <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
+                             {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
+                             <span>{L}</span>
                           </div>
-                       ))}
-                    </div>
-                 </div>
-
-                 <div className="flex gap-4 flex-1 overflow-hidden">
-                    <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Execution</span>
-                    <div className="bg-white border border-[#E5E5E5] p-4 lg:p-6 w-full font-mono text-[11px] lg:text-[13px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
-                       {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
-                       {logs.map((L, i) => {
-                          const isTool = L.includes("Tool");
-                          const isPayload = L.includes("Payload");
-                          return (
-                            <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
-                               {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
-                               <span>{L}</span>
-                            </div>
-                          )
-                       })}
-                    </div>
-                 </div>
+                        )
+                     })}
+                  </div>
                </div>
             )}
 
@@ -439,7 +458,7 @@ export default function App() {
                </div>
             )}
 
-            {activeTab === 'payload' && (
+            {activeTab === 'input' && (
                <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
                   <div className="flex justify-between items-center shrink-0">
                      <p className="text-xs text-[#666]">Define the instructions the agent receives when it fetches the payload.</p>
@@ -459,8 +478,15 @@ export default function App() {
             {activeTab === 'workspace' && (
                <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
                   <div className="flex justify-between items-center shrink-0">
-                     <p className="text-xs text-[#666]">Explore and download files in the project workspace.</p>
-                     <button onClick={loadWorkspace} disabled={fetchingFile} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
+                     <div className="flex items-center gap-2">
+                        {currentDir && (
+                           <button onClick={navigateUp} className="text-[#666] hover:text-[#121212] p-1">
+                              <ArrowLeft className="w-3 h-3" />
+                           </button>
+                        )}
+                        <p className="text-xs text-[#666] font-mono">{currentDir ? `/${currentDir}` : '/ (Root)'}</p>
+                     </div>
+                     <button onClick={() => loadWorkspace(currentDir)} disabled={fetchingFile} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
                         {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Refresh
                      </button>
                   </div>
@@ -483,12 +509,21 @@ export default function App() {
                               <tr key={i} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#F9F9F9] transition-colors group">
                                 <td className="p-4 flex items-center gap-3">
                                   {item.isDirectory ? <Folder className="w-4 h-4 text-[#0047AB]" /> : <FileText className="w-4 h-4 text-[#666]" />}
-                                  <span className="font-mono text-sm text-[#121212] truncate max-w-[200px] lg:max-w-[400px]">{item.name}</span>
+                                  {item.isDirectory ? (
+                                    <button 
+                                       onClick={() => loadWorkspace(item.path)}
+                                       className="font-mono text-sm text-[#0047AB] hover:underline truncate max-w-[200px] lg:max-w-[400px] text-left"
+                                    >
+                                       {item.name}/
+                                    </button>
+                                  ) : (
+                                    <span className="font-mono text-sm text-[#121212] truncate max-w-[200px] lg:max-w-[400px]">{item.name}</span>
+                                  )}
                                 </td>
                                 <td className="p-4 text-right">
                                   {!item.isDirectory && (
                                     <button 
-                                      onClick={() => downloadFile(item.name)}
+                                      onClick={() => downloadFile(item.path)}
                                       className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-[#121212] text-[#121212] hover:bg-[#121212] hover:text-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
                                     >
                                       <Download className="w-3 h-3" /> Download

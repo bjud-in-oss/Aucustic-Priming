@@ -238,14 +238,22 @@ async function startServer() {
   // Custom API routes for workspace Explorer
   app.get("/api/workspace/list", async (req, res) => {
     try {
+      const dirPath = req.query.dir as string || "";
       const cwd = process.cwd();
-      const items = await fs.readdir(cwd, { withFileTypes: true });
+      const targetPath = path.join(cwd, dirPath);
+      
+      if (!targetPath.startsWith(cwd)) {
+          return res.status(403).json({ error: "Access denied" });
+      }
+
+      const items = await fs.readdir(targetPath, { withFileTypes: true });
 
       const ignored = ['node_modules', '.git', 'dist', '.env', '.env.example', '.nvmrc'];
       const files = items
           .filter((item: any) => !ignored.includes(item.name) && !item.name.startsWith('.'))
           .map((item: any) => ({
               name: item.name,
+              path: path.join(dirPath, item.name).replace(/\\/g, '/'),
               isDirectory: item.isDirectory(),
           }));
 
@@ -256,11 +264,15 @@ async function startServer() {
   });
 
   app.get("/api/workspace/download", (req, res) => {
-     const filename = req.query.name as string;
+     const filename = req.query.path as string;
      if (!filename) {
-        return res.status(400).json({ error: "No filename provided" });
+        return res.status(400).json({ error: "No path provided" });
      }
-     const filePath = path.join(process.cwd(), filename);
+     const cwd = process.cwd();
+     const filePath = path.join(cwd, filename);
+     if (!filePath.startsWith(cwd)) {
+          return res.status(403).json({ error: "Access denied" });
+     }
      res.download(filePath, (err) => {
         if (err) {
            if (!res.headersSent) res.status(404).json({ error: "File not found" });
