@@ -33,7 +33,7 @@ export default function App() {
   const pushingRef = useRef(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [latencies, setLatencies] = useState<LatencyLog[]>([]);
-  const [transcription, setTranscription] = useState("");
+  const [transcripts, setTranscripts] = useState<{role: 'user' | 'agent', text: string}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
   
@@ -75,7 +75,16 @@ export default function App() {
         } else if (msg.type === "latency") {
            setLatencies(prev => [...prev, { measure: msg.measure, ms: msg.ms, description: msg.description }]);
         } else if (msg.type === "transcription") {
-           setTranscription(prev => prev + " " + msg.text);
+           setTranscripts(prev => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === msg.role) {
+                 const newTranscripts = [...prev];
+                 newTranscripts[newTranscripts.length - 1] = { ...last, text: last.text + msg.text };
+                 return newTranscripts;
+              } else {
+                 return [...prev, { role: msg.role, text: msg.text }];
+              }
+           });
         } else if (msg.type === "status") {
            setModelStatus(msg.status);
            if (msg.status === "executing_code" && msg.command) {
@@ -289,10 +298,16 @@ export default function App() {
             </div>
 
             <div className="flex flex-col gap-6 overflow-hidden h-full">
-              <div className="flex gap-4 shrink-0 h-1/3">
+              <div className="flex gap-4 shrink-0 h-1/3 min-h-[150px]">
                  <span className="text-[10px] uppercase font-bold text-[#666] shrink-0 w-20 pt-2">Transcript</span>
-                 <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4">
-                    {transcription ? `"${transcription}"` : <span className="text-[#666]">Awaiting model speech...</span>}
+                 <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
+                    {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
+                    {transcripts.map((t, i) => (
+                       <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
+                          <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
+                          <span>{t.text ? `"${t.text}"` : ""}</span>
+                       </div>
+                    ))}
                  </div>
               </div>
 

@@ -58,7 +58,13 @@ async function startServer() {
             // Output transcription
             const text = message.serverContent?.outputTranscription?.text;
             if (text) {
-                clientWs.send(JSON.stringify({ type: "transcription", text }));
+                clientWs.send(JSON.stringify({ type: "transcription", text, role: "agent" }));
+            }
+            
+            // Input transcription
+            const userText = message.serverContent?.inputTranscription?.text;
+            if (userText) {
+                clientWs.send(JSON.stringify({ type: "transcription", text: userText, role: "user" }));
             }
 
             // Handle tools
