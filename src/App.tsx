@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download, MessageSquare, Activity, Settings, ArrowLeft } from 'lucide-react';
+import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download, MessageSquare, Activity, Settings, ArrowLeft, Globe } from 'lucide-react';
 import { motion } from 'motion/react';
 import { WebContainer } from '@webcontainer/api';
+import { get, set } from 'idb-keyval';
 
 function pcmToBase64(float32Array: Float32Array): string {
     const buffer = new ArrayBuffer(float32Array.length * 2);
@@ -41,7 +42,7 @@ export default function App() {
   const [executionOutputs, setExecutionOutputs] = useState<{command: string, stdout: string, stderr: string, error: string | null}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
-  const [activeTab, setActiveTab] = useState<'transcript' | 'logs' | 'output' | 'input' | 'workspace'>('transcript');
+  const [activeTab, setActiveTab] = useState<'logs' | 'output' | 'workspace'>('logs');
   const [payloadText, setPayloadText] = useState("Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt");
   const [workspaceItems, setWorkspaceItems] = useState<{name: string, path: string, isDirectory: boolean}[]>([]);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -58,6 +59,33 @@ export default function App() {
     setLogs(prev => [...prev.slice(-49), `${new Date().toISOString().split('T')[1].slice(0,-1)}: ${msg}`]);
   }, []);
 
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const syncToIDB = async (instance: WebContainer) => {
+      try {
+          const vfs: any = {};
+          const traverse = async (dir: string, currentLevel: any) => {
+              const files = await instance.fs.readdir(dir, { withFileTypes: true });
+              for (const file of files) {
+                  if (file.name === 'node_modules' || file.name === '.git') continue;
+                  const fullPath = dir === '/' ? `/${file.name}` : `${dir}/${file.name}`;
+                  if (file.isDirectory()) {
+                      currentLevel[file.name] = { directory: {} };
+                      await traverse(fullPath, currentLevel[file.name].directory);
+                  } else {
+                      const contents = await instance.fs.readFile(fullPath, 'utf-8');
+                      currentLevel[file.name] = { file: { contents } };
+                  }
+              }
+          };
+          await traverse('/', vfs);
+          await set('webcontainer-vfs', vfs);
+          addLog("VFS synchronized to IndexedDB.");
+      } catch (err) {
+          console.error("VFS Sync Error", err);
+      }
+  };
+
   useEffect(() => {
     if (isBooting.current) return;
     isBooting.current = true;
@@ -69,6 +97,21 @@ export default function App() {
         setWebcontainer(instance);
         webcontainerRef.current = instance;
         addLog("WebContainer booted successfully");
+
+        let savedVfs = await get('webcontainer-vfs');
+        if (!savedVfs) {
+            savedVfs = {
+                'plan.md': { file: { contents: '# Autonomous Agent Plan\n\nAwaiting instructions...' } }
+            };
+        }
+        await instance.mount(savedVfs);
+        addLog("VFS mounted from IndexedDB.");
+
+        instance.on('server-ready', (port, url) => {
+            addLog(`WebContainer server ready on port ${port}`);
+            setPreviewUrl(url);
+        });
+
       } catch (error) {
         addLog(`WebContainer boot failed: ${error instanceof Error ? error.message : String(error)}`);
         isBooting.current = false;
@@ -120,6 +163,7 @@ export default function App() {
             stderr,
             exitCode
         }));
+        await syncToIDB(webcontainerRef.current);
         loadWorkspace(); 
     } catch (err: any) {
         ws.send(JSON.stringify({
@@ -226,14 +270,17 @@ export default function App() {
      setFetchingFile(true);
      setWorkspaceError(null);
      try {
-       const res = await fetch(`/api/workspace/list?dir=${encodeURIComponent(dir)}`);
-       const data = await res.json();
-       if (res.ok) {
-          setWorkspaceItems(data.files || []);
-          setCurrentDir(dir);
-       } else {
-          setWorkspaceError(data.error);
+       if (!webcontainerRef.current) {
+           throw new Error("WebContainer not booted.");
        }
+       const files = await webcontainerRef.current.fs.readdir(dir || '/', { withFileTypes: true });
+       const items = files.map(f => ({
+           name: f.name,
+           path: dir === '/' || !dir ? `/${f.name}` : `${dir}/${f.name}`,
+           isDirectory: f.isDirectory()
+       }));
+       setWorkspaceItems(items);
+       setCurrentDir(dir || '/');
      } catch (err: any) {
        setWorkspaceError(err.message);
      } finally {
@@ -243,9 +290,9 @@ export default function App() {
 
   const downloadFile = async (filepath: string) => {
      try {
-       const res = await fetch(`/api/workspace/download?path=${encodeURIComponent(filepath)}`);
-       if (!res.ok) throw new Error("Failed to download file");
-       const blob = await res.blob();
+       if (!webcontainerRef.current) return;
+       const contents = await webcontainerRef.current.fs.readFile(filepath);
+       const blob = new Blob([contents]);
        const url = window.URL.createObjectURL(blob);
        const a = document.createElement('a');
        a.href = url;
@@ -447,206 +494,10 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 flex flex-col lg:flex-row gap-6 lg:gap-12 min-h-0 overflow-y-auto lg:overflow-hidden">
-          {/* Left Column: Content Area */}
-          <div className="lg:flex-1 flex flex-col gap-6 lg:overflow-hidden flex-shrink-0 lg:flex-shrink">
-            
-            {/* Tabs */}
-            <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0 overflow-x-auto whitespace-nowrap">
-               <button onClick={() => setActiveTab('transcript')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'transcript' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <MessageSquare className="w-3 h-3" /> Transcript
-               </button>
-               <button onClick={() => setActiveTab('logs')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'logs' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Activity className="w-3 h-3" /> System Logs
-               </button>
-               <button onClick={() => setActiveTab('output')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'output' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Code className="w-3 h-3" /> Output
-               </button>
-               <button onClick={() => setActiveTab('workspace')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'workspace' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Folder className="w-3 h-3" /> Workspace
-               </button>
-               <button onClick={() => setActiveTab('input')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'input' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
-                 <Settings className="w-3 h-3" /> Input
-               </button>
-            </div>
-
-            {activeTab === 'transcript' && (
-               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
-                  <div className="flex justify-between items-center shrink-0">
-                     <p className="text-xs text-[#666]">Historic conversation dialogue.</p>
-                  </div>
-                  <div className="text-xl lg:text-2xl flex-1 italic font-serif leading-relaxed overflow-y-auto pr-4 flex flex-col gap-3">
-                     {transcripts.length === 0 && <span className="text-[#666]">Awaiting conversation...</span>}
-                     {transcripts.map((t, i) => (
-                        <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
-                           <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
-                           <span>{t.text ? `"${t.text}"` : ""}</span>
-                        </div>
-                     ))}
-                  </div>
-               </div>
-            )}
-
-            {activeTab === 'logs' && (
-               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
-                  <div className="flex justify-between items-center shrink-0">
-                     <p className="text-xs text-[#666]">Telemetry and tool execution tracking.</p>
-                  </div>
-                  <div className="bg-white border border-[#E5E5E5] p-4 lg:p-6 w-full font-mono text-[11px] lg:text-[13px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
-                     {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
-                     {logs.map((L, i) => {
-                        const isTool = L.includes("Tool");
-                        const isPayload = L.includes("Payload");
-                        return (
-                          <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
-                             {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
-                             <span>{L}</span>
-                          </div>
-                        )
-                     })}
-                  </div>
-               </div>
-            )}
-
-            {activeTab === 'output' && (
-               <div className="flex flex-col gap-6 overflow-hidden h-[500px] lg:h-full">
-                  <div className="flex justify-between items-center shrink-0">
-                     <p className="text-xs text-[#666]">Results of recent terminal executions by the agent.</p>
-                  </div>
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-8 pr-4">
-                     {executionOutputs.length === 0 ? (
-                        <div className="text-[#999] italic mt-4 text-sm">No code has been executed yet.</div>
-                     ) : (
-                        executionOutputs.map((out, i) => (
-                           <div key={i} className="flex flex-col gap-2">
-                              <div className="font-mono text-xs bg-[#E5E5E5] px-3 py-1.5 inline-block w-fit font-bold rounded-sm">
-                                 $ {out.command}
-                              </div>
-                              {out.stdout && (
-                                 <pre className="bg-[#121212] text-white p-4 font-mono text-sm overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap">
-                                    {out.stdout}
-                                 </pre>
-                              )}
-                              {(out.stderr || out.error) && (
-                                 <pre className="bg-[#FF4500]/10 text-[#FF4500] border border-[#FF4500]/20 p-4 font-mono text-sm overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap">
-                                    {out.stderr || out.error}
-                                 </pre>
-                              )}
-                           </div>
-                        ))
-                     )}
-                  </div>
-               </div>
-            )}
-
-            {activeTab === 'input' && (
-               <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
-                  <div className="flex justify-between items-center shrink-0">
-                     <p className="text-xs text-[#666]">Define the instructions the agent receives when it fetches the payload.</p>
-                     <button onClick={savePayload} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors">
-                        <Save className="w-3 h-3" /> Save to Server
-                     </button>
-                  </div>
-                  <textarea 
-                     value={payloadText}
-                     onChange={(e) => setPayloadText(e.target.value)}
-                     className="w-full flex-1 bg-white border border-[#E5E5E5] p-4 font-mono text-sm leading-relaxed shadow-sm resize-none focus:outline-none focus:border-[#121212]"
-                     placeholder="Enter exact system instructions the model should execute..."
-                  />
-               </div>
-            )}
-
-            {activeTab === 'workspace' && (
-               <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
-                  <div className="flex justify-between items-center shrink-0">
-                     <div className="flex items-center gap-2">
-                        {currentDir && (
-                           <button onClick={navigateUp} className="text-[#666] hover:text-[#121212] p-1">
-                              <ArrowLeft className="w-3 h-3" />
-                           </button>
-                        )}
-                        <p className="text-xs text-[#666] font-mono">{currentDir ? `/${currentDir}` : '/ (Root)'}</p>
-                     </div>
-                     <button onClick={() => loadWorkspace(currentDir)} disabled={fetchingFile} className="bg-[#121212] text-white px-4 py-2 font-bold uppercase text-[10px] flex items-center gap-2 hover:bg-black transition-colors disabled:opacity-50">
-                        {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Refresh
-                     </button>
-                  </div>
-
-                  <div className="flex-1 bg-white border border-[#E5E5E5] shadow-sm overflow-y-auto">
-                     {workspaceError ? (
-                        <div className="p-6 text-[#FF4500] font-mono text-sm">{workspaceError}</div>
-                     ) : workspaceItems.length === 0 ? (
-                        <div className="p-6 text-[#999] italic flex items-center justify-center h-full">Workspace is empty.</div>
-                     ) : (
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-[#E5E5E5] text-[10px] uppercase tracking-widest text-[#666]">
-                              <th className="p-4 font-bold max-w-[200px]">Name</th>
-                              <th className="p-4 font-bold text-right">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {workspaceItems.map((item, i) => (
-                              <tr key={i} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#F9F9F9] transition-colors group">
-                                <td className="p-4 flex items-center gap-3">
-                                  {item.isDirectory ? <Folder className="w-4 h-4 text-[#0047AB]" /> : <FileText className="w-4 h-4 text-[#666]" />}
-                                  {item.isDirectory ? (
-                                    <button 
-                                       onClick={() => loadWorkspace(item.path)}
-                                       className="font-mono text-sm text-[#0047AB] hover:underline truncate max-w-[200px] lg:max-w-[400px] text-left"
-                                    >
-                                       {item.name}/
-                                    </button>
-                                  ) : (
-                                    <span className="font-mono text-sm text-[#121212] truncate max-w-[200px] lg:max-w-[400px]">{item.name}</span>
-                                  )}
-                                </td>
-                                <td className="p-4 text-right">
-                                  {!item.isDirectory && (
-                                    <button 
-                                      onClick={() => downloadFile(item.path)}
-                                      className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest px-3 py-1.5 border border-[#121212] text-[#121212] hover:bg-[#121212] hover:text-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
-                                    >
-                                      <Download className="w-3 h-3" /> Download
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                     )}
-                  </div>
-               </div>
-            )}
-            
-          </div>
-
-          {/* Right Column: Metrics & Controls */}
-          <aside className="lg:w-80 flex flex-col lg:border-l border-[#121212] lg:pl-12 shrink-0 lg:overflow-y-auto w-full">
-             <div className="mb-8 lg:mb-12 mt-4 lg:mt-0">
-               <h2 className="text-xs font-bold uppercase tracking-widest mb-6 border-b border-[#121212] pb-2">Telemetry Logs</h2>
-               
-               <div className="flex flex-col gap-6">
-                  {['T1', 'T2', 'T3'].map(measure => {
-                     const logsFound = latencies.filter(l => l.measure === measure);
-                     const msStr = logsFound.length > 0 ? `${logsFound[logsFound.length - 1].ms}` : '--';
-                     const label = measure === 'T1' ? 'ActivityEnd \u2192 ToolCall' : measure === 'T2' ? 'ToolResp \u2192 ExecuteCode' : 'Exec \u2192 AudioStart';
-                     const colorClass = measure === 'T2' ? 'text-[#0047AB]' : '';
-
-                     return (
-                       <div key={measure} className="flex justify-between items-baseline">
-                         <span className="text-[10px] uppercase tracking-tighter">{measure}: {label}</span>
-                         <span className={`text-3xl lg:text-4xl font-serif italic ${colorClass}`}>
-                            {msStr}<span className="text-sm italic ml-1 text-[#121212]">ms</span>
-                         </span>
-                       </div>
-                     );
-                  })}
-               </div>
-             </div>
-
-             <div className="mt-auto pt-4 lg:pt-8 w-full">
+        <main className="flex-1 flex flex-col lg:flex-row gap-6 min-h-0 overflow-y-auto lg:overflow-hidden">
+          {/* Left Panel: Voice Comms & System Overrides */}
+          <aside className="lg:w-80 flex flex-col gap-6 lg:border-r border-[#E5E5E5] lg:pr-6 shrink-0 lg:overflow-y-auto w-full">
+             <div className="pt-2 w-full">
                 <motion.button
                   onMouseDown={handlePushStart}
                   onMouseUp={handlePushEnd}
@@ -654,7 +505,7 @@ export default function App() {
                   onTouchStart={handlePushStart}
                   onTouchEnd={handlePushEnd}
                   disabled={!connected}
-                  className={`w-full p-6 lg:p-8 flex flex-col items-center justify-center text-center transition-colors ${connected ? (pushing ? 'bg-[#FF4500] text-white' : 'bg-[#121212] text-white hover:bg-[#333]') : 'bg-[#E5E5E5] text-[#999] cursor-not-allowed'}`}
+                  className={`w-full p-6 lg:p-8 flex flex-col items-center justify-center text-center transition-colors shadow-sm ${connected ? (pushing ? 'bg-[#FF4500] text-white' : 'bg-[#121212] text-white hover:bg-[#333]') : 'bg-[#E5E5E5] text-[#999] cursor-not-allowed'}`}
                 >
                   <div className={`w-12 h-12 rounded-full border-2 mb-4 flex items-center justify-center ${pushing ? 'border-white/50' : connected ? 'border-white/20' : 'border-[#999]/20'}`}>
                     <Mic className={`w-5 h-5 ${pushing ? 'animate-pulse' : ''}`} />
@@ -663,7 +514,7 @@ export default function App() {
                   <p className="text-xs opacity-70 font-serif italic">{pushing ? "Recording..." : "Hold spacebar to stream"}</p>
                 </motion.button>
                 
-                <div className="mt-6">
+                <div className="mt-6 bg-white border border-[#E5E5E5] p-4 shadow-sm">
                   <div className="flex justify-between text-[10px] font-bold uppercase mb-2">
                     <span>Model Status</span>
                     <span className={connected ? "text-[#0047AB]" : "text-[#666]"}>
@@ -671,13 +522,198 @@ export default function App() {
                     </span>
                   </div>
                   <div className="h-[1px] bg-[#121212] w-full mb-2"></div>
-                  <div className="flex justify-between text-[10px] font-bold uppercase">
+                  <div className="flex justify-between text-[10px] font-bold uppercase text-[#999]">
                     <span>VAD Mode</span>
                     <span>Disabled (PTT)</span>
                   </div>
                 </div>
              </div>
+
+             <div className="flex flex-col gap-3 flex-1 min-h-[300px]">
+                <div className="flex justify-between items-center shrink-0">
+                   <p className="text-[10px] uppercase font-bold tracking-widest text-[#121212]">System Override</p>
+                   <button onClick={savePayload} className="bg-[#121212] text-white px-3 py-1.5 font-bold uppercase text-[9px] flex items-center gap-1.5 hover:bg-black transition-colors">
+                      <Save className="w-3 h-3" /> Save Payload
+                   </button>
+                </div>
+                <p className="text-xs text-[#666] italic font-serif">Injected when agent calls fetch_payload step.</p>
+                <textarea 
+                   value={payloadText}
+                   onChange={(e) => setPayloadText(e.target.value)}
+                   className="w-full flex-1 bg-white border border-[#E5E5E5] p-3 font-mono text-[11px] leading-relaxed shadow-sm resize-none focus:outline-none focus:border-[#121212]"
+                   placeholder="Enter exact system instructions..."
+                />
+             </div>
           </aside>
+
+          {/* Center Panel: Logs, Terminal, Workspace */}
+          <div className="lg:flex-1 flex flex-col gap-4 lg:overflow-hidden flex-shrink-0 lg:pr-2">
+             {/* Tabs */}
+             <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0 overflow-x-auto whitespace-nowrap pt-2">
+                <button onClick={() => setActiveTab('logs')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'logs' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                  <Activity className="w-3 h-3" /> Logs & Telemetry
+                </button>
+                <button onClick={() => setActiveTab('output')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'output' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                  <Terminal className="w-3 h-3" /> Terminal Output
+                </button>
+                <button onClick={() => setActiveTab('workspace')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'workspace' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                  <Folder className="w-3 h-3" /> VFS Explorer
+                </button>
+             </div>
+
+             {activeTab === 'logs' && (
+                <div className="flex flex-col gap-4 overflow-hidden h-[500px] lg:h-full">
+                   <div className="bg-white border border-[#E5E5E5] p-4 w-full font-mono text-[11px] leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-1">
+                      {logs.length === 0 && <div className="text-[#666]">No events logged yet.</div>}
+                      {logs.map((L, i) => {
+                         const isTool = L.includes("Tool") || L.includes("Executing in WebContainer");
+                         const isPayload = L.includes("Payload");
+                         return (
+                           <div key={i} className={`flex items-start gap-2 ${isTool ? 'text-[#0047AB] font-bold mt-2' : isPayload ? 'text-[#FF4500] font-bold mt-2' : 'text-[#666]'}`}>
+                              {isTool || isPayload ? <span className="w-2 h-2 rounded-full shrink-0 mt-1.5 opacity-80" style={{ backgroundColor: isTool ? '#0047AB' : '#FF4500'}}></span> : <span className="w-2 shrink-0">&gt;</span>}
+                              <span>{L}</span>
+                           </div>
+                         )
+                      })}
+                   </div>
+                   
+                   {latencies.length > 0 && (
+                       <div className="bg-white border border-[#E5E5E5] p-4 flex gap-6 overflow-x-auto shadow-sm">
+                          {['T1', 'T2', 'T3'].map(measure => {
+                             const logsFound = latencies.filter(l => l.measure === measure);
+                             const msStr = logsFound.length > 0 ? `${logsFound[logsFound.length - 1].ms}` : '--';
+                             const label = measure === 'T1' ? 'Ping Tool' : measure === 'T2' ? 'Tool Execute' : 'Ping Audio';
+                             return (
+                               <div key={measure} className="flex flex-col shrink-0">
+                                 <span className="text-[9px] uppercase tracking-tighter text-[#999]">{measure}: {label}</span>
+                                 <span className={`text-xl font-serif italic ${measure === 'T2' ? 'text-[#0047AB]' : 'text-[#121212]'}`}>
+                                    {msStr}<span className="text-[10px] italic ml-1 text-[#666]">ms</span>
+                                 </span>
+                               </div>
+                             );
+                          })}
+                       </div>
+                   )}
+                </div>
+             )}
+
+             {activeTab === 'output' && (
+                <div className="flex flex-col gap-4 overflow-hidden h-[500px] lg:h-full pr-2">
+                   <div className="flex-1 overflow-y-auto flex flex-col gap-6">
+                      {executionOutputs.length === 0 ? (
+                         <div className="text-[#999] italic mt-4 text-sm font-serif">No commands have been executed yet.</div>
+                      ) : (
+                         executionOutputs.map((out, i) => (
+                            <div key={i} className="flex flex-col gap-2">
+                               <div className="font-mono text-[10px] bg-[#121212] text-white px-3 py-1.5 inline-block w-fit font-bold rounded-sm shadow-sm">
+                                  ❯  {out.command}
+                               </div>
+                               {out.stdout && (
+                                  <pre className="bg-white border border-[#E5E5E5] text-[#121212] p-4 font-mono text-[11px] overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap shadow-sm">
+                                     {out.stdout}
+                                  </pre>
+                               )}
+                               {(out.stderr || out.error) && (
+                                  <pre className="bg-[#FF4500]/5 text-[#FF4500] border border-[#FF4500]/20 p-4 font-mono text-[11px] overflow-x-auto rounded-sm leading-relaxed whitespace-pre-wrap shadow-sm">
+                                     {out.stderr || out.error}
+                                  </pre>
+                               )}
+                            </div>
+                         ))
+                      )}
+                   </div>
+                </div>
+             )}
+
+             {activeTab === 'workspace' && (
+                <div className="flex flex-col gap-4 overflow-hidden h-[400px] lg:h-full">
+                   <div className="flex justify-between items-center shrink-0">
+                      <div className="flex items-center gap-2">
+                         {currentDir && (
+                            <button onClick={navigateUp} className="text-[#666] hover:text-[#121212] p-1 border border-[#E5E5E5] bg-white shadow-sm">
+                               <ArrowLeft className="w-3 h-3" />
+                            </button>
+                         )}
+                         <p className="text-xs text-[#121212] font-mono font-bold bg-white px-3 py-1.5 border border-[#E5E5E5] shadow-sm">{currentDir ? `/${currentDir}` : '/ (Root)'}</p>
+                      </div>
+                      <button onClick={() => loadWorkspace(currentDir)} disabled={fetchingFile} className="bg-white border border-[#E5E5E5] text-[#121212] px-3 py-1.5 font-bold uppercase text-[9px] flex items-center gap-1.5 hover:bg-[#F9F9F9] transition-colors disabled:opacity-50 shadow-sm">
+                         {fetchingFile ? <Loader2 className="w-3 h-3 animate-spin"/> : <RefreshCw className="w-3 h-3" />} Sync VFS
+                      </button>
+                   </div>
+
+                   <div className="flex-1 bg-white border border-[#E5E5E5] shadow-sm overflow-y-auto">
+                      {workspaceError ? (
+                         <div className="p-6 text-[#FF4500] font-mono text-sm">{workspaceError}</div>
+                      ) : workspaceItems.length === 0 ? (
+                         <div className="p-6 text-[#999] italic font-serif flex items-center justify-center h-full">WebContainer Workspace is empty.</div>
+                      ) : (
+                         <table className="w-full text-left border-collapse">
+                           <thead>
+                             <tr className="border-b border-[#E5E5E5] text-[9px] uppercase tracking-widest text-[#999] bg-[#F9F9F9]">
+                               <th className="p-3 font-bold pl-4">Name</th>
+                               <th className="p-3 font-bold text-right pr-4">Actions</th>
+                             </tr>
+                           </thead>
+                           <tbody className="text-sm font-mono">
+                             {workspaceItems.map((item, i) => (
+                               <tr key={i} className="border-b border-[#E5E5E5] last:border-b-0 hover:bg-[#F9F9F9] transition-colors group">
+                                 <td className="p-3 pl-4 flex items-center gap-3">
+                                   {item.isDirectory ? <Folder className="w-4 h-4 text-[#0047AB]" /> : <FileText className="w-4 h-4 text-[#666]" />}
+                                   {item.isDirectory ? (
+                                     <button 
+                                        onClick={() => loadWorkspace(item.path)}
+                                        className="text-[#0047AB] hover:underline truncate max-w-[150px] lg:max-w-[250px] text-left"
+                                     >
+                                        {item.name}/
+                                     </button>
+                                   ) : (
+                                     <span className="text-[#121212] truncate max-w-[150px] lg:max-w-[250px]">{item.name}</span>
+                                   )}
+                                 </td>
+                                 <td className="p-3 pr-4 text-right">
+                                   {!item.isDirectory && (
+                                     <button 
+                                       onClick={() => downloadFile(item.path)}
+                                       className="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-[#121212] text-[#121212] hover:bg-[#121212] hover:text-white transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                     >
+                                       <Download className="w-3 h-3" /> DL
+                                     </button>
+                                   )}
+                                 </td>
+                               </tr>
+                             ))}
+                           </tbody>
+                         </table>
+                      )}
+                   </div>
+                </div>
+             )}
+          </div>
+
+          {/* Right Panel: Live Preview Iframe */}
+          <div className="lg:w-1/3 flex flex-col bg-white border border-[#E5E5E5] shadow-sm relative overflow-hidden shrink-0 min-h-[400px]">
+             <div className="bg-[#121212] text-white p-3 flex items-center justify-between shadow-sm z-10 shrink-0">
+                <div className="flex items-center gap-2">
+                   <Globe className="w-4 h-4 text-[#0047AB]" />
+                   <span className="text-[10px] uppercase font-bold tracking-widest text-[#E5E5E5]">Container Preview</span>
+                </div>
+                {previewUrl ? 
+                   <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] hover:underline text-[#0047AB] font-mono truncate max-w-[150px] block">{previewUrl}</a> :
+                   <span className="text-[9px] text-[#666] font-mono">No active port</span>
+                }
+             </div>
+             <div className="flex-1 w-full bg-[#FAF9F6]">
+                {previewUrl ? (
+                   <iframe src={previewUrl} className="w-full h-full border-none" title="Live Preview" allow="cross-origin-isolated" />
+                ) : (
+                   <div className="flex flex-col items-center justify-center h-full text-[#999] p-6 text-center gap-4">
+                      <Loader2 className="w-6 h-6 animate-spin text-[#121212]/20" />
+                      <p className="text-xs italic font-serif opacity-80">Awaiting WebContainer server bindings...</p>
+                      <p className="text-[9px] uppercase tracking-widest font-bold mt-2">Waiting for 'npm run dev'</p>
+                   </div>
+                )}
+             </div>
+          </div>
         </main>
 
         {/* Footer */}
