@@ -111,6 +111,10 @@ async function startServer() {
     let tFetchPayloadSent: number | null = null;
     let tExecuteFinish: number | null = null;
 
+    let pendingExecution: { resolve: (res: any) => void, reject: (err: any) => void } | null = null;
+    let executionTimeout: NodeJS.Timeout | null = null;
+    let executionCommandId: string | null = null;
+
     try {
       session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
@@ -196,27 +200,64 @@ async function startServer() {
                           safeClientSend({ type: "status", status: "executing_code", command });
                           safeClientSend({ type: "log", message: `Executing code: ${command}` });
                           
-                          exec(command, (error, stdout, stderr) => {
-                              try {
-                                const resultStr = `Command: ${command}\nStdout: ${stdout || ""}\nStderr: ${stderr || ""}\nError: ${error ? error.message : null}`;
-                                terminalContext.push(resultStr);
+                          const secureCommand = `export CI=true && ${command}`;
+                          const commandId = `cmd-${Date.now()}`;
+                          
+                          if (pendingExecution) {
+                              if (executionTimeout) clearTimeout(executionTimeout);
+                              pendingExecution.reject(new Error("Another command started before this one finished."));
+                          }
 
+                          executionCommandId = commandId;
+                          safeClientSend({ type: "webcontainer_execute", id: commandId, command: secureCommand });
+
+                          new Promise<any>((resolve, reject) => {
+                              pendingExecution = { resolve, reject };
+                              executionTimeout = setTimeout(() => {
+                                  if (pendingExecution && executionCommandId === commandId) {
+                                      pendingExecution.reject(new Error("WebContainer execution timed out after 30 seconds."));
+                                      pendingExecution = null;
+                                      executionCommandId = null;
+                                  }
+                              }, 30000); // 30 seconds timeout
+                          }).then((result: any) => {
+                              try {
                                 const functionResponses = [{
                                     id: call.id,
                                     name: call.name,
                                     response: {
-                                        stdout: stdout || "",
-                                        stderr: stderr || "",
-                                        error: error ? error.message : null,
+                                        stdout: result.stdout || "",
+                                        stderr: result.stderr || "",
+                                        error: result.error || null,
+                                        exitCode: result.exitCode,
                                         thought_signature
                                     }
                                 }];
                                 session.sendToolResponse({ functionResponses });
                                 tExecuteFinish = Date.now();
                                 safeClientSend({ type: "log", message: `Execution completed.` });
-                                safeClientSend({ type: "execution_output", command, stdout: stdout || "", stderr: stderr || "", error: error ? error.message : null });
+                                safeClientSend({ type: "execution_output", command, stdout: result.stdout || "", stderr: result.stderr || "", error: result.error || null });
                               } catch (innerErr) {
                                 console.error("Error sending tool response:", innerErr);
+                              }
+                          }).catch((err: any) => {
+                              try {
+                                const functionResponses = [{
+                                    id: call.id,
+                                    name: call.name,
+                                    response: {
+                                        stdout: "",
+                                        stderr: err.message,
+                                        error: err.message,
+                                        exitCode: 1,
+                                        thought_signature
+                                    }
+                                }];
+                                session.sendToolResponse({ functionResponses });
+                                tExecuteFinish = Date.now();
+                                safeClientSend({ type: "log", message: `Execution failed: ${err.message}` });
+                              } catch (innerErr) {
+                                console.error("Error sending error response:", innerErr);
                               }
                           });
                       }
@@ -282,6 +323,17 @@ async function startServer() {
           } else if (msg.type === "set_payload") {
               activePayload = msg.payload;
               safeClientSend({ type: "log", message: "Payload updated by user." });
+          } else if (msg.type === "webcontainer_execute_result") {
+              if (pendingExecution && executionCommandId === msg.commandId) {
+                  const { stdout, stderr, exitCode } = msg;
+                  const resultStr = `Command: ${msg.command}\nStdout: ${stdout || ""}\nStderr: ${stderr || ""}\nExitCode: ${exitCode}`;
+                  terminalContext.push(resultStr);
+                  
+                  if (executionTimeout) clearTimeout(executionTimeout);
+                  pendingExecution.resolve({ stdout, stderr, exitCode, error: null });
+                  pendingExecution = null;
+                  executionCommandId = null;
+              }
           } else if (msg.audio && session) {
               session.sendRealtimeInput({
                 audio: { data: msg.audio, mimeType: "audio/pcm;rate=16000" },
@@ -293,6 +345,13 @@ async function startServer() {
       });
       
       clientWs.on("close", () => {
+          if (pendingExecution) {
+              if (executionTimeout) clearTimeout(executionTimeout);
+              pendingExecution.reject(new Error("Websocket client disconnected before command execution completed."));
+              pendingExecution = null;
+              executionCommandId = null;
+              safeClientSend({ type: "log", message: "Client disconnected, cancelling pending execution." });
+          }
           if (session) {
              // Cleanup
           }

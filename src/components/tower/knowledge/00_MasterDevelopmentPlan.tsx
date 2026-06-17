@@ -33,6 +33,12 @@ To provide a full, isolated Node.js environment directly in the browser with ful
 1.  **Cross-Origin Isolation:** \`vite.config.ts\` requires headers \`Cross-Origin-Embedder-Policy: require-corp\` and \`Cross-Origin-Opener-Policy: same-origin\` to enable \`SharedArrayBuffer\`.
 2.  **WebContainer Bootstrapping:** \`src/App.tsx\` must instantiate \`@webcontainer/api\` exactly once during component mount via a dedicated \`useEffect\` with proper tracking refs, storing the instance in state and logging status to the system telemetry tracker.
 
+## Feature: Cycle 5 - Bridging the Execution Gap
+To transition execution from the external backend into the client-side WebContainer:
+1.  **WebSocket Command Routing:** The `execute_code` tool on `server.ts` will stop using `child_process.exec`. Instead, the server will emit the raw bash command via WebSocket to the connected client.
+2.  **WebContainer Execution:** The client receives the WebSocket event and immediately spins up a process inside the WebContainer instance using `webcontainerInstance.spawn()`.
+3.  **Self-Modifying Memory (`plan.md`):** A persistent state mechanism within the WebContainer volume will be implemented. The agent can use terminal commands (e.g., `echo` or `cat`) to read/write a `plan.md` file. This acts as a localized, autonomous memory payload, mimicking classic bash routine memory loops.
+
 ## Agile Cycles
-We are currently in Cycle 2, moving into Cycle 3 (Sync & Impact Analysis) based on user feedback.
+We are currently in Cycle 2, establishing the theoretical framework for WebContainer WebSocket streaming (Bridging the execution gap) before advancing to Cycle 3 code impact analysis.
 `;

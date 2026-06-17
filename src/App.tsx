@@ -29,6 +29,7 @@ interface LatencyLog {
 
 export default function App() {
   const [webcontainer, setWebcontainer] = useState<WebContainer | null>(null);
+  const webcontainerRef = useRef<WebContainer | null>(null);
   const isBooting = useRef(false);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -66,6 +67,7 @@ export default function App() {
         addLog("Starting WebContainer boot process...");
         const instance = await WebContainer.boot();
         setWebcontainer(instance);
+        webcontainerRef.current = instance;
         addLog("WebContainer booted successfully");
       } catch (error) {
         addLog(`WebContainer boot failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -75,6 +77,61 @@ export default function App() {
 
     bootWebContainer();
   }, [addLog]);
+
+  const handleWebContainerExecute = async (ws: WebSocket, msg: { id: string, command: string }) => {
+    if (!webcontainerRef.current) {
+        addLog("Error: WebContainer not booted yet, blocking execution.");
+        ws.send(JSON.stringify({
+            type: "webcontainer_execute_result",
+            commandId: msg.id,
+            command: msg.command,
+            stdout: "",
+            stderr: "WebContainer not booted",
+            exitCode: 1
+        }));
+        return;
+    }
+
+    addLog(`Executing in WebContainer: ${msg.command}`);
+    try {
+        const process = await webcontainerRef.current.spawn('bash', ['-c', msg.command]);
+        
+        let stdout = "";
+        let stderr = "";
+        const MAX_OUTPUT = 15000;
+
+        process.output.pipeTo(new WritableStream({
+            write(data) {
+                if (stdout.length < MAX_OUTPUT) {
+                    stdout += data;
+                } else if (!stdout.endsWith("\n[TRUNCATED]")) {
+                    stdout += "\n[TRUNCATED]";
+                }
+            }
+        }));
+
+        const exitCode = await process.exit;
+        
+        ws.send(JSON.stringify({
+            type: "webcontainer_execute_result",
+            commandId: msg.id,
+            command: msg.command,
+            stdout,
+            stderr,
+            exitCode
+        }));
+        loadWorkspace(); 
+    } catch (err: any) {
+        ws.send(JSON.stringify({
+            type: "webcontainer_execute_result",
+            commandId: msg.id,
+            command: msg.command,
+            stdout: "",
+            stderr: err.message,
+            exitCode: 1
+        }));
+    }
+  };
 
   const connect = async () => {
     setConnecting(true);
@@ -131,6 +188,8 @@ export default function App() {
            addLog(`Error: ${msg.message}`);
         } else if (msg.type === "audio") {
            playAudioChunk(msg.audio);
+        } else if (msg.type === "webcontainer_execute") {
+           handleWebContainerExecute(ws, msg);
         }
       };
 
