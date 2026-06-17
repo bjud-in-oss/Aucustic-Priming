@@ -42,8 +42,8 @@ export default function App() {
   const [executionOutputs, setExecutionOutputs] = useState<{command: string, stdout: string, stderr: string, error: string | null}[]>([]);
   const [modelStatus, setModelStatus] = useState<"idle" | "processing" | "fetching_payload" | "executing_code" | "speaking">("idle");
   const [activeCommand, setActiveCommand] = useState("");
-  const [activeTab, setActiveTab] = useState<'logs' | 'output' | 'workspace'>('logs');
-  const [payloadText, setPayloadText] = useState("Analyze the local directory and create a file named 'ouroboros_test.txt' containing 'ouroboros_test'. You MUST use the execute_code tool. Your execute_code command should be exactly: echo 'ouroboros_test' > ouroboros_test.txt");
+  const [activeTab, setActiveTab] = useState<'transcript' | 'logs' | 'output' | 'workspace'>('logs');
+  const [payloadText, setPayloadText] = useState("Du är Ouroboros, en autonom AI som lever inuti en WebContainer (en isolerad Linux-sandlåda i min webbläsare).\nDitt aktuella uppdrag: Skapa en fil vid namn index.html som innehåller en snygg, digital klocka byggd i HTML, CSS och JavaScript som uppdateras i realtid.\nNär du har skrivit filen, exekvera kommandot 'npx http-server -p 3000' för att starta en webbserver, så att din klocka renderas live i min Iframe.");
   const [workspaceItems, setWorkspaceItems] = useState<{name: string, path: string, isDirectory: boolean}[]>([]);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [fetchingFile, setFetchingFile] = useState(false);
@@ -550,6 +550,9 @@ export default function App() {
           <div className="lg:flex-1 flex flex-col gap-4 lg:overflow-hidden flex-shrink-0 lg:pr-2">
              {/* Tabs */}
              <div className="flex gap-4 border-b border-[#E5E5E5] shrink-0 overflow-x-auto whitespace-nowrap pt-2">
+                <button onClick={() => setActiveTab('transcript')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'transcript' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
+                  <MessageSquare className="w-3 h-3" /> Transcript
+                </button>
                 <button onClick={() => setActiveTab('logs')} className={`pb-2 text-[10px] uppercase font-bold tracking-widest flex items-center gap-2 ${activeTab === 'logs' ? 'border-b-2 border-[#121212] text-[#121212]' : 'text-[#999] hover:text-[#666]'}`}>
                   <Activity className="w-3 h-3" /> Logs & Telemetry
                 </button>
@@ -560,6 +563,20 @@ export default function App() {
                   <Folder className="w-3 h-3" /> VFS Explorer
                 </button>
              </div>
+
+             {activeTab === 'transcript' && (
+                <div className="flex flex-col gap-4 overflow-hidden h-[500px] lg:h-full">
+                   <div className="bg-white border border-[#E5E5E5] p-6 w-full font-serif text-lg leading-relaxed shadow-sm overflow-y-auto h-full flex flex-col gap-4">
+                      {transcripts.length === 0 && <div className="text-[#999] italic">Awaiting conversation...</div>}
+                      {transcripts.map((t, i) => (
+                         <div key={i} className={`flex flex-col ${t.role === 'user' ? 'text-[#121212]' : 'text-[#0047AB]'}`}>
+                            <span className="text-[9px] uppercase font-bold font-sans not-italic tracking-widest opacity-50 mb-1">{t.role}</span>
+                            <span>{t.text ? `"${t.text}"` : ""}</span>
+                         </div>
+                      ))}
+                   </div>
+                </div>
+             )}
 
              {activeTab === 'logs' && (
                 <div className="flex flex-col gap-4 overflow-hidden h-[500px] lg:h-full">
