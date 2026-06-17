@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download, MessageSquare, Activity, Settings, ArrowLeft } from 'lucide-react';
 import { motion } from 'motion/react';
+import { WebContainer } from '@webcontainer/api';
 
 function pcmToBase64(float32Array: Float32Array): string {
     const buffer = new ArrayBuffer(float32Array.length * 2);
@@ -27,6 +28,8 @@ interface LatencyLog {
 }
 
 export default function App() {
+  const [webcontainer, setWebcontainer] = useState<WebContainer | null>(null);
+  const isBooting = useRef(false);
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [pushing, setPushing] = useState(false);
@@ -53,6 +56,25 @@ export default function App() {
   const addLog = useCallback((msg: string) => {
     setLogs(prev => [...prev.slice(-49), `${new Date().toISOString().split('T')[1].slice(0,-1)}: ${msg}`]);
   }, []);
+
+  useEffect(() => {
+    if (isBooting.current) return;
+    isBooting.current = true;
+
+    const bootWebContainer = async () => {
+      try {
+        addLog("Starting WebContainer boot process...");
+        const instance = await WebContainer.boot();
+        setWebcontainer(instance);
+        addLog("WebContainer booted successfully");
+      } catch (error) {
+        addLog(`WebContainer boot failed: ${error instanceof Error ? error.message : String(error)}`);
+        isBooting.current = false;
+      }
+    };
+
+    bootWebContainer();
+  }, [addLog]);
 
   const connect = async () => {
     setConnecting(true);

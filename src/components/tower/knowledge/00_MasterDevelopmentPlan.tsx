@@ -28,6 +28,11 @@ To elevate the Workspace tab from a simple fetch-input into a professional utili
     *   **Workspace:** The file directory browser.
     *   **Input:** The system instructions injector.
 
+## Feature: Client-Side WebContainer Node.js Environment
+To provide a full, isolated Node.js environment directly in the browser with full performance:
+1.  **Cross-Origin Isolation:** \`vite.config.ts\` requires headers \`Cross-Origin-Embedder-Policy: require-corp\` and \`Cross-Origin-Opener-Policy: same-origin\` to enable \`SharedArrayBuffer\`.
+2.  **WebContainer Bootstrapping:** \`src/App.tsx\` must instantiate \`@webcontainer/api\` exactly once during component mount via a dedicated \`useEffect\` with proper tracking refs, storing the instance in state and logging status to the system telemetry tracker.
+
 ## Agile Cycles
 We are currently in Cycle 2, moving into Cycle 3 (Sync & Impact Analysis) based on user feedback.
 `;
