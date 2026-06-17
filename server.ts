@@ -21,6 +21,13 @@ const ai = new GoogleGenAI({
 
 async function startServer() {
   const app = express();
+
+  app.use((req, res, next) => {
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+    next();
+  });
+
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/live" });
 
