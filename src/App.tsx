@@ -16,9 +16,6 @@ function pcmToBase64(float32Array: Float32Array): string {
     for (let i = 0; i < bytes.byteLength; i += 1000) {
        binary += String.fromCharCode(...bytes.subarray(i, i + 1000));
     }
-    if (bytes.length % 1000 !== 0) {
-       binary += String.fromCharCode(...bytes.subarray(Math.floor(bytes.length / 1000) * 1000));
-    }
     return btoa(binary);
 }
 
@@ -185,7 +182,12 @@ export default function App() {
       audioCtxRef.current = audioCtx;
       nextStartTimeRef.current = 0;
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          sampleRate: 16000, 
+          channelCount: 1 
+        } 
+      });
       streamRef.current = stream;
 
       addLog("Fetching Ephemeral Token from /api/get-token...");
