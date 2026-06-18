@@ -199,7 +199,9 @@ export default function App() {
       addLog("Token received. Connecting to Gemini Live API...");
 
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiWrite?bearer_token=${token}`);
+      const isApiKey = !token.startsWith("ya29."); 
+      const authParam = isApiKey ? `key=${token}` : `bearer_token=${token}`;
+      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiWrite?${authParam}`);
       wsRef.current = ws;
 
       let pendingExecutionLocal: any = null;
