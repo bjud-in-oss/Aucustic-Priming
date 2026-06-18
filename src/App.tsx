@@ -220,6 +220,9 @@ export default function App() {
                  voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } }
                }
             },
+            realtimeInputConfig: {
+              automaticActivityDetection: { disabled: true }
+            },
             tools: [{
               functionDeclarations: [
                   {
@@ -314,7 +317,7 @@ export default function App() {
                                   id: call.id,
                                   name: call.name,
                                   response: {
-                                      payload: contextualPayload
+                                      result: contextualPayload
                                   }
                               }]
                           }
@@ -357,10 +360,12 @@ export default function App() {
                                         id: call.id,
                                         name: call.name,
                                         response: {
-                                            stdout: truncatedStdout,
-                                            stderr: truncatedStderr,
-                                            error: null,
-                                            exitCode
+                                            result: {
+                                                stdout: truncatedStdout,
+                                                stderr: truncatedStderr,
+                                                error: null,
+                                                exitCode
+                                            }
                                         }
                                     }]
                                 }
@@ -379,10 +384,12 @@ export default function App() {
                                         id: call.id,
                                         name: call.name,
                                         response: {
-                                            stdout: "",
-                                            stderr: err.message,
-                                            error: err.message,
-                                            exitCode: 1
+                                            result: {
+                                                stdout: "",
+                                                stderr: err.message,
+                                                error: err.message,
+                                                exitCode: 1
+                                            }
                                         }
                                     }]
                                 }
