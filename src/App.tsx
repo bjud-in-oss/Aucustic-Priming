@@ -307,99 +307,95 @@ export default function App() {
                   
                   if (call.name === "fetch_payload") {
                       setModelStatus("fetching_payload");
-                      let thoughtSignature = msg.toolCall.thoughtSignature || call.id || (call.args ? call.args.thought_signature as string : undefined);
-                      
-                      let contextualPayload = payloadText; // read from local state
+                      const thoughtSignature = msg.toolCall.thoughtSignature ?? undefined;
                       
                       const responseMsg: any = {
                           toolResponse: {
                               functionResponses: [{
                                   id: call.id,
                                   name: call.name,
-                                  response: {
-                                      result: contextualPayload
-                                  }
+                                  response: { result: payloadText }
                               }]
                           }
                       };
+                      
                       if (thoughtSignature) {
-                        responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                          responseMsg.toolResponse.thoughtSignature = thoughtSignature; // fallback
+                          responseMsg.thoughtSignature = thoughtSignature; // Root level as requested
                       }
+                      
                       ws.send(JSON.stringify(responseMsg));
-                      addLog(`Payload injected, ID: ${thoughtSignature}`);
+                      addLog(`Payload injected.`);
                   } else if (call.name === "execute_code") {
-                      let thoughtSignature = msg.toolCall.thoughtSignature || call.id || (call.args ? call.args.thought_signature as string : undefined);
+                      const thoughtSignature = msg.toolCall.thoughtSignature ?? undefined;
                       const command = (call.args?.command as string) || "echo no-op";
                       
                       setModelStatus("executing_code");
                       setActiveCommand(command);
-                      addLog(`Executing code: ${command}`);
-                      
-                      const secureCommand = `export CI=true && ${command}`;
-                      const commandId = `cmd-${Date.now()}`;
-                      
-                      const executeInWebContainer = async () => {
-                         try {
-                            if (!webcontainerRef.current) throw new Error("WebContainer not ready.");
-                            const process = await webcontainerRef.current.spawn("jsh", ["-c", secureCommand]);
-                            let stdout = "";
-                            let stderr = "";
-                            process.output.pipeTo(
-                              new WritableStream({
-                                write(data) { stdout += data; }
-                              })
-                            );
-                            const exitCode = await process.exit;
-                            
-                            const truncatedStdout = stdout.length > 15000 ? "... [TRUNCATED] ...\n" + stdout.substring(stdout.length - 15000) : stdout;
-                            const truncatedStderr = stderr.length > 15000 ? "... [TRUNCATED] ...\n" + stderr.substring(stderr.length - 15000) : stderr;
+                      addLog(`Executing: ${command}`);
 
-                            const responseMsg: any = {
-                                toolResponse: {
-                                    functionResponses: [{
-                                        id: call.id,
-                                        name: call.name,
-                                        response: {
-                                            result: {
-                                                stdout: truncatedStdout,
-                                                stderr: truncatedStderr,
-                                                error: null,
-                                                exitCode
-                                            }
-                                        }
-                                    }]
-                                }
-                            };
-                            if (thoughtSignature) {
-                              responseMsg.toolResponse.thoughtSignature = thoughtSignature;
-                            }
-                            ws.send(JSON.stringify(responseMsg));
-                            addLog(`Execution completed.`);
-                            setExecutionOutputs(prev => [...prev, { command, stdout, stderr, error: null }]);
-                            setActiveTab('output');
-                         } catch (err: any) {
-                            const responseMsg: any = {
-                                toolResponse: {
-                                    functionResponses: [{
-                                        id: call.id,
-                                        name: call.name,
-                                        response: {
-                                            result: {
-                                                stdout: "",
-                                                stderr: err.message,
-                                                error: err.message,
-                                                exitCode: 1
-                                            }
-                                        }
-                                    }]
-                                }
-                            };
-                            if (thoughtSignature) {
-                              responseMsg.toolResponse.thoughtSignature = thoughtSignature;
-                            }
-                            ws.send(JSON.stringify(responseMsg));
-                            addLog(`Execution failed: ${err.message}`);
-                         }
+                      const executeInWebContainer = async () => {
+                          try {
+                              if (!webcontainerRef.current) throw new Error("WebContainer not ready.");
+                              
+                              // Byt från jsh till sh
+                              const proc = await webcontainerRef.current.spawn("sh", ["-c", command]);
+                              
+                              let output = "";
+                              proc.output.pipeTo(new WritableStream({
+                                  write(data) {
+                                      if (output.length < 15000) output += data;
+                                      else if (!output.endsWith("\n[TRUNCATED]")) output += "\n[TRUNCATED]";
+                                  }
+                              }));
+                              
+                              const exitCode = await proc.exit;
+
+                              const responseMsg: any = {
+                                  toolResponse: {
+                                      functionResponses: [{
+                                          id: call.id,
+                                          name: call.name,
+                                          response: {
+                                              result: { stdout: output, stderr: "", exitCode }
+                                          }
+                                      }]
+                                  }
+                              };
+                              
+                              if (thoughtSignature) {
+                                  responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                                  responseMsg.thoughtSignature = thoughtSignature;
+                              }
+                              
+                              ws.send(JSON.stringify(responseMsg));
+                              addLog(`Execution done (exit ${exitCode}).`);
+                              setExecutionOutputs(prev => [...prev, { command, stdout: output, stderr: "", error: null }]);
+                              setActiveTab('output');
+                              
+                              if (webcontainerRef.current) {
+                                  await syncToIDB(webcontainerRef.current);
+                                  loadWorkspace();
+                              }
+                          } catch (err: any) {
+                              const responseMsg: any = {
+                                  toolResponse: {
+                                      functionResponses: [{
+                                          id: call.id,
+                                          name: call.name,
+                                          response: {
+                                              result: { stdout: "", stderr: err.message, exitCode: 1 }
+                                          }
+                                      }]
+                                  }
+                              };
+                              if (thoughtSignature) {
+                                  responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                                  responseMsg.thoughtSignature = thoughtSignature;
+                              }
+                              ws.send(JSON.stringify(responseMsg));
+                              addLog(`Execution failed: ${err.message}`);
+                          }
                       };
                       executeInWebContainer();
                   }
