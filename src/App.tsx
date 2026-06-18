@@ -22,6 +22,8 @@ function pcmToBase64(float32Array: Float32Array): string {
     return btoa(binary);
 }
 
+const SILENCE_BURST = btoa('\0'.repeat(8192));
+
 interface LatencyLog {
   measure: string;
   ms: number;
@@ -549,7 +551,6 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(true);
     pushingRef.current = true;
-    wsRef.current.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
@@ -557,9 +558,20 @@ export default function App() {
 
   const handlePushEnd = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    
+    // The Clean Break Protocol
+    wsRef.current.send(JSON.stringify({
+      realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: SILENCE_BURST } }
+    }));
+    
+    setTimeout(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+         wsRef.current.send(JSON.stringify({ clientContent: { turnComplete: true } }));
+      }
+    }, 50);
+
     setPushing(false);
     pushingRef.current = false;
-    wsRef.current.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
   }, []);
 
   useEffect(() => {
