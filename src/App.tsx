@@ -304,26 +304,28 @@ export default function App() {
                   
                   if (call.name === "fetch_payload") {
                       setModelStatus("fetching_payload");
-                      const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
+                      let thoughtSignature = msg.toolCall.thoughtSignature || call.id || (call.args ? call.args.thought_signature as string : undefined);
                       
                       let contextualPayload = payloadText; // read from local state
                       
-                      const responseMsg = {
+                      const responseMsg: any = {
                           toolResponse: {
                               functionResponses: [{
                                   id: call.id,
                                   name: call.name,
                                   response: {
-                                      payload: contextualPayload,
-                                      thought_signature
+                                      payload: contextualPayload
                                   }
                               }]
                           }
                       };
+                      if (thoughtSignature) {
+                        responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                      }
                       ws.send(JSON.stringify(responseMsg));
-                      addLog(`Payload injected, ID: ${thought_signature}`);
+                      addLog(`Payload injected, ID: ${thoughtSignature}`);
                   } else if (call.name === "execute_code") {
-                      const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
+                      let thoughtSignature = msg.toolCall.thoughtSignature || call.id || (call.args ? call.args.thought_signature as string : undefined);
                       const command = (call.args?.command as string) || "echo no-op";
                       
                       setModelStatus("executing_code");
@@ -349,7 +351,7 @@ export default function App() {
                             const truncatedStdout = stdout.length > 15000 ? "... [TRUNCATED] ...\n" + stdout.substring(stdout.length - 15000) : stdout;
                             const truncatedStderr = stderr.length > 15000 ? "... [TRUNCATED] ...\n" + stderr.substring(stderr.length - 15000) : stderr;
 
-                            const responseMsg = {
+                            const responseMsg: any = {
                                 toolResponse: {
                                     functionResponses: [{
                                         id: call.id,
@@ -358,18 +360,20 @@ export default function App() {
                                             stdout: truncatedStdout,
                                             stderr: truncatedStderr,
                                             error: null,
-                                            exitCode,
-                                            thought_signature
+                                            exitCode
                                         }
                                     }]
                                 }
                             };
+                            if (thoughtSignature) {
+                              responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                            }
                             ws.send(JSON.stringify(responseMsg));
                             addLog(`Execution completed.`);
                             setExecutionOutputs(prev => [...prev, { command, stdout, stderr, error: null }]);
                             setActiveTab('output');
                          } catch (err: any) {
-                            const responseMsg = {
+                            const responseMsg: any = {
                                 toolResponse: {
                                     functionResponses: [{
                                         id: call.id,
@@ -378,12 +382,14 @@ export default function App() {
                                             stdout: "",
                                             stderr: err.message,
                                             error: err.message,
-                                            exitCode: 1,
-                                            thought_signature
+                                            exitCode: 1
                                         }
                                     }]
                                 }
                             };
+                            if (thoughtSignature) {
+                              responseMsg.toolResponse.thoughtSignature = thoughtSignature;
+                            }
                             ws.send(JSON.stringify(responseMsg));
                             addLog(`Execution failed: ${err.message}`);
                          }
@@ -551,6 +557,7 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(true);
     pushingRef.current = true;
+    wsRef.current.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
@@ -564,11 +571,8 @@ export default function App() {
       realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: SILENCE_BURST } }
     }));
     
-    setTimeout(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-         wsRef.current.send(JSON.stringify({ clientContent: { turnComplete: true } }));
-      }
-    }, 50);
+    wsRef.current.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+    wsRef.current.send(JSON.stringify({ clientContent: { turnComplete: true } }));
 
     setPushing(false);
     pushingRef.current = false;
