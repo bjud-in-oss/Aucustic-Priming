@@ -201,7 +201,7 @@ export default function App() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const isApiKey = !token.startsWith("ya29."); 
       const authParam = isApiKey ? `key=${token}` : `bearer_token=${token}`;
-      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiWrite?${authParam}`);
+      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?${authParam}`);
       wsRef.current = ws;
 
       let pendingExecutionLocal: any = null;
@@ -397,8 +397,8 @@ export default function App() {
         }
       };
 
-      ws.onclose = () => {
-        addLog("WebSocket disconnected.");
+      ws.onclose = (event) => {
+        addLog(`WebSocket disconnected. Code: ${event.code}, Reason: ${event.reason}`);
         setConnected(false);
         setConnecting(false);
         stopAudio();
