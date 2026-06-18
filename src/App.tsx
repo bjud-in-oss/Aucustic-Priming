@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Mic, Play, Square, Loader2, Terminal, Code, Folder, RefreshCw, Save, FileText, Download, MessageSquare, Activity, Settings, ArrowLeft, Globe } from 'lucide-react';
 import { motion } from 'motion/react';
 import { WebContainer } from '@webcontainer/api';
+import { PreviewPanel } from './components/PreviewPanel';
 import { get, set } from 'idb-keyval';
 
 function pcmToBase64(float32Array: Float32Array): string {
@@ -200,8 +201,8 @@ export default function App() {
       
       addLog("Token received. Connecting to Gemini Live API...");
 
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`);
+      const cleanToken = token.replace(/['"]+/g, '').trim();
+      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${cleanToken}`);
       wsRef.current = ws;
 
       let pendingExecutionLocal: any = null;
@@ -305,9 +306,17 @@ export default function App() {
               if (call) {
                   addLog(`Tool invoked: ${call.name}`);
                   
+                  let thoughtSignature = msg.toolCall.thoughtSignature;
+                  if (!thoughtSignature && msg.serverContent?.modelTurn?.parts) {
+                      for (const part of msg.serverContent.modelTurn.parts) {
+                          if (part.thoughtSignature) {
+                              thoughtSignature = part.thoughtSignature;
+                          }
+                      }
+                  }
+
                   if (call.name === "fetch_payload") {
                       setModelStatus("fetching_payload");
-                      const thoughtSignature = msg.toolCall.thoughtSignature ?? undefined;
                       
                       const responseMsg: any = {
                           toolResponse: {
@@ -320,14 +329,12 @@ export default function App() {
                       };
                       
                       if (thoughtSignature) {
-                          responseMsg.toolResponse.thoughtSignature = thoughtSignature; // fallback
-                          responseMsg.thoughtSignature = thoughtSignature; // Root level as requested
+                          responseMsg.toolResponse.thoughtSignature = thoughtSignature;
                       }
                       
                       ws.send(JSON.stringify(responseMsg));
                       addLog(`Payload injected.`);
                   } else if (call.name === "execute_code") {
-                      const thoughtSignature = msg.toolCall.thoughtSignature ?? undefined;
                       const command = (call.args?.command as string) || "echo no-op";
                       
                       setModelStatus("executing_code");
@@ -365,7 +372,6 @@ export default function App() {
                               
                               if (thoughtSignature) {
                                   responseMsg.toolResponse.thoughtSignature = thoughtSignature;
-                                  responseMsg.thoughtSignature = thoughtSignature;
                               }
                               
                               ws.send(JSON.stringify(responseMsg));
@@ -391,7 +397,6 @@ export default function App() {
                               };
                               if (thoughtSignature) {
                                   responseMsg.toolResponse.thoughtSignature = thoughtSignature;
-                                  responseMsg.thoughtSignature = thoughtSignature;
                               }
                               ws.send(JSON.stringify(responseMsg));
                               addLog(`Execution failed: ${err.message}`);
@@ -404,6 +409,11 @@ export default function App() {
         } catch (err: any) {
           console.error("Error parsing message", err);
         }
+      };
+
+      ws.onerror = (e) => {
+        addLog(`WebSocket Error: ${(e as any).message || "Unknown error"}. Check console.`);
+        console.error("Live API WebSocket Error:", e);
       };
 
       ws.onclose = (event) => {
@@ -549,6 +559,17 @@ export default function App() {
     }
   };
 
+  const sendText = (text: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      clientContent: {
+        turns: [{ role: "user", parts: [{ text }] }],
+        turnComplete: true
+      }
+    }));
+    addLog(`Sent text: "${text}"`);
+  };
+
   const disconnect = () => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -692,6 +713,14 @@ export default function App() {
                   <p className="text-[10px] uppercase tracking-[0.2em] font-bold mb-1">Push to Talk</p>
                   <p className="text-xs opacity-70 font-serif italic">{pushing ? "Recording..." : "Hold spacebar to stream"}</p>
                 </motion.button>
+
+                <button
+                  onClick={() => sendText("I am ready. Fetch your payload and begin execution.")}
+                  disabled={!connected}
+                  className={`w-full mt-2 py-3 text-[10px] uppercase tracking-widest font-bold transition-colors ${connected ? 'bg-white border border-[#121212] text-[#121212] hover:bg-[#121212] hover:text-white' : 'bg-transparent border border-[#E5E5E5] text-[#999] cursor-not-allowed'}`}
+                >
+                  Force Trigger Agent
+                </button>
                 
                 <div className="mt-6 bg-white border border-[#E5E5E5] p-4 shadow-sm">
                   <div className="flex justify-between text-[10px] font-bold uppercase mb-2">
@@ -887,29 +916,7 @@ export default function App() {
           </div>
 
           {/* Right Panel: Live Preview Iframe */}
-          <div className="lg:w-1/3 flex flex-col bg-white border border-[#E5E5E5] shadow-sm relative overflow-hidden shrink-0 min-h-[400px]">
-             <div className="bg-[#121212] text-white p-3 flex items-center justify-between shadow-sm z-10 shrink-0">
-                <div className="flex items-center gap-2">
-                   <Globe className="w-4 h-4 text-[#0047AB]" />
-                   <span className="text-[10px] uppercase font-bold tracking-widest text-[#E5E5E5]">Container Preview</span>
-                </div>
-                {previewUrl ? 
-                   <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="text-[9px] hover:underline text-[#0047AB] font-mono truncate max-w-[150px] block">{previewUrl}</a> :
-                   <span className="text-[9px] text-[#666] font-mono">No active port</span>
-                }
-             </div>
-             <div className="flex-1 w-full bg-[#FAF9F6]">
-                {previewUrl ? (
-                   <iframe src={previewUrl} className="w-full h-full border-none" title="Live Preview" allow="cross-origin-isolated" />
-                ) : (
-                   <div className="flex flex-col items-center justify-center h-full text-[#999] p-6 text-center gap-4">
-                      <Loader2 className="w-6 h-6 animate-spin text-[#121212]/20" />
-                      <p className="text-xs italic font-serif opacity-80">Awaiting WebContainer server bindings...</p>
-                      <p className="text-[9px] uppercase tracking-widest font-bold mt-2">Waiting for 'npm run dev'</p>
-                   </div>
-                )}
-             </div>
-          </div>
+          <PreviewPanel previewUrl={previewUrl} />
         </main>
 
         {/* Footer */}
