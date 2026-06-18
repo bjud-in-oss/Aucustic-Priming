@@ -188,52 +188,210 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
+      addLog("Fetching Ephemeral Token from /api/get-token...");
+      const tokenRes = await fetch("/api/get-token");
+      if (!tokenRes.ok) {
+        throw new Error(`Failed to fetch token: ${tokenRes.status}`);
+      }
+      const tokenData = await tokenRes.json();
+      const token = tokenData.token;
+      
+      addLog("Token received. Connecting to Gemini Live API...");
+
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${wsProtocol}//${window.location.host}/live`);
+      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiWrite?bearer_token=${token}`);
       wsRef.current = ws;
 
+      let pendingExecutionLocal: any = null;
+      let executionTimeoutLocal: any = null;
+
       ws.onopen = () => {
-        addLog("WebSocket connected.");
+        addLog("WebSocket connected. Sending setup...");
+        
+        const setupMessage = {
+          setup: {
+            model: "models/gemini-2.0-flash-exp",
+            systemInstruction: { parts: [{ text: "You are an agent. When the user tells you they are ready and to fetch your payload, invoke fetch_payload(). Then, process the payload and immediately execute the instructions it gives you using execute_code(). Acknowledge back to the user when you're done." }] },
+            generationConfig: {
+               responseModalities: ["AUDIO"],
+               speechConfig: {
+                 voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } }
+               }
+            },
+            tools: [{
+              functionDeclarations: [
+                  {
+                      name: "fetch_payload",
+                      description: "Fetches a massive text payload of system instructions after the user primes you.",
+                      parameters: {
+                          type: "OBJECT",
+                          properties: {
+                              thought_signature: {
+                                  type: "STRING",
+                                  description: "Optional random identifier."
+                              }
+                          }
+                      }
+                  },
+                  {
+                      name: "execute_code",
+                      description: "Executes real terminal commands on the host machine.",
+                      parameters: {
+                          type: "OBJECT",
+                          properties: {
+                              command: {
+                                  type: "STRING",
+                                  description: "The shell command to execute."
+                              }
+                          },
+                          required: ["command"]
+                      }
+                  }
+              ]
+            }]
+          }
+        };
+        ws.send(JSON.stringify(setupMessage));
+        
         setConnected(true);
         setConnecting(false);
       };
 
       ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "log") {
-           addLog(msg.message);
-        } else if (msg.type === "latency") {
-           setLatencies(prev => [...prev, { measure: msg.measure, ms: msg.ms, description: msg.description }]);
-        } else if (msg.type === "transcription") {
-           setTranscripts(prev => {
-              const last = prev[prev.length - 1];
-              if (last && last.role === msg.role) {
-                 const newTranscripts = [...prev];
-                 newTranscripts[newTranscripts.length - 1] = { ...last, text: last.text + msg.text };
-                 return newTranscripts;
-              } else {
-                 return [...prev, { role: msg.role, text: msg.text }];
+        if (event.data instanceof Blob) {
+           // We expect JSON strings, Blob might be raw audio or error
+           return;
+        }
+
+        try {
+          const msg = JSON.parse(event.data);
+          
+          if (msg.serverContent) {
+              const audioData = msg.serverContent.modelTurn?.parts?.[0]?.inlineData?.data;
+              if (audioData) {
+                  setModelStatus("speaking");
+                  playAudioChunk(audioData);
               }
-           });
-        } else if (msg.type === "status") {
-           setModelStatus(msg.status);
-           if (msg.status === "executing_code" && msg.command) {
-              setActiveCommand(msg.command);
-           } else if (msg.status !== "executing_code") {
-              setActiveCommand("");
-           }
-        } else if (msg.type === "execution_output") {
-           setExecutionOutputs(prev => [...prev, { command: msg.command, stdout: msg.stdout, stderr: msg.stderr, error: msg.error }]);
-           setActiveTab('output'); // auto-switch to output
-        } else if (msg.type === "interrupted") {
-           addLog("Agent interrupted.");
-           nextStartTimeRef.current = audioCtxRef.current!.currentTime;
-        } else if (msg.type === "error") {
-           addLog(`Error: ${msg.message}`);
-        } else if (msg.type === "audio") {
-           playAudioChunk(msg.audio);
-        } else if (msg.type === "webcontainer_execute") {
-           handleWebContainerExecute(ws, msg);
+              if (msg.serverContent.interrupted) {
+                  addLog("Agent interrupted.");
+                  setModelStatus("idle");
+              }
+              if (msg.serverContent.turnComplete) {
+                  setModelStatus("idle");
+              }
+              
+              const agentText = msg.serverContent?.modelTurn?.parts?.[0]?.text;
+              if (agentText) {
+                 setTranscripts(prev => {
+                    const last = prev[prev.length - 1];
+                    if (last && last.role === "agent") {
+                       const newTranscripts = [...prev];
+                       newTranscripts[newTranscripts.length - 1] = { ...last, text: last.text + agentText };
+                       return newTranscripts;
+                    } else {
+                       return [...prev, { role: "agent", text: agentText }];
+                    }
+                 });
+              }
+          }
+
+          if (msg.toolCall) {
+              const call = msg.toolCall.functionCalls?.[0];
+              if (call) {
+                  addLog(`Tool invoked: ${call.name}`);
+                  
+                  if (call.name === "fetch_payload") {
+                      setModelStatus("fetching_payload");
+                      const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
+                      
+                      let contextualPayload = payloadText; // read from local state
+                      
+                      const responseMsg = {
+                          toolResponse: {
+                              functionResponses: [{
+                                  id: call.id,
+                                  name: call.name,
+                                  response: {
+                                      payload: contextualPayload,
+                                      thought_signature
+                                  }
+                              }]
+                          }
+                      };
+                      ws.send(JSON.stringify(responseMsg));
+                      addLog(`Payload injected, ID: ${thought_signature}`);
+                  } else if (call.name === "execute_code") {
+                      const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
+                      const command = (call.args?.command as string) || "echo no-op";
+                      
+                      setModelStatus("executing_code");
+                      setActiveCommand(command);
+                      addLog(`Executing code: ${command}`);
+                      
+                      const secureCommand = `export CI=true && ${command}`;
+                      const commandId = `cmd-${Date.now()}`;
+                      
+                      const executeInWebContainer = async () => {
+                         try {
+                            if (!webcontainerRef.current) throw new Error("WebContainer not ready.");
+                            const process = await webcontainerRef.current.spawn("jsh", ["-c", secureCommand]);
+                            let stdout = "";
+                            let stderr = "";
+                            process.output.pipeTo(
+                              new WritableStream({
+                                write(data) { stdout += data; }
+                              })
+                            );
+                            const exitCode = await process.exit;
+                            
+                            const truncatedStdout = stdout.length > 15000 ? "... [TRUNCATED] ...\n" + stdout.substring(stdout.length - 15000) : stdout;
+                            const truncatedStderr = stderr.length > 15000 ? "... [TRUNCATED] ...\n" + stderr.substring(stderr.length - 15000) : stderr;
+
+                            const responseMsg = {
+                                toolResponse: {
+                                    functionResponses: [{
+                                        id: call.id,
+                                        name: call.name,
+                                        response: {
+                                            stdout: truncatedStdout,
+                                            stderr: truncatedStderr,
+                                            error: null,
+                                            exitCode,
+                                            thought_signature
+                                        }
+                                    }]
+                                }
+                            };
+                            ws.send(JSON.stringify(responseMsg));
+                            addLog(`Execution completed.`);
+                            setExecutionOutputs(prev => [...prev, { command, stdout, stderr, error: null }]);
+                            setActiveTab('output');
+                         } catch (err: any) {
+                            const responseMsg = {
+                                toolResponse: {
+                                    functionResponses: [{
+                                        id: call.id,
+                                        name: call.name,
+                                        response: {
+                                            stdout: "",
+                                            stderr: err.message,
+                                            error: err.message,
+                                            exitCode: 1,
+                                            thought_signature
+                                        }
+                                    }]
+                                }
+                            };
+                            ws.send(JSON.stringify(responseMsg));
+                            addLog(`Execution failed: ${err.message}`);
+                         }
+                      };
+                      executeInWebContainer();
+                  }
+              }
+          }
+        } catch (err: any) {
+          console.error("Error parsing message", err);
         }
       };
 
@@ -245,15 +403,17 @@ export default function App() {
       };
 
       const source = audioCtx.createMediaStreamSource(stream);
-      // Deprecated but works reliably for raw PCM dumping
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
       
       processor.onaudioprocess = (e) => {
-        if (!pushingRef.current) return; // Only send when Push-to-Talk is active
+        if (!pushingRef.current) return;
         if (ws.readyState === WebSocket.OPEN) {
           const base64 = pcmToBase64(e.inputBuffer.getChannelData(0));
-          ws.send(JSON.stringify({ audio: base64 }));
+          const msg = {
+            realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: base64 }] }
+          };
+          ws.send(JSON.stringify(msg));
         }
       };
 
@@ -389,7 +549,6 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(true);
     pushingRef.current = true;
-    wsRef.current.send(JSON.stringify({ event: "activityStart" }));
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
@@ -399,7 +558,8 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(false);
     pushingRef.current = false;
-    wsRef.current.send(JSON.stringify({ event: "activityEnd" }));
+    // Send turnComplete so the agent knows we stopped talking if VAD is slow
+    wsRef.current.send(JSON.stringify({ clientContent: { turnComplete: true } }));
   }, []);
 
   useEffect(() => {

@@ -29,7 +29,6 @@ async function startServer() {
   });
 
   const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: "/live" });
 
   let activePayload = `
 <ouroboros_system_override timestamp="2026-06-08T14:30:00Z" priority="CRITICAL">
@@ -100,273 +99,23 @@ async function startServer() {
 </ouroboros_system_override>
 `;
 
-  let terminalContext: string[] = [];
-
-  wss.on("connection", async (clientWs) => {
-    function safeClientSend(payload: any) {
-      if (clientWs.readyState === 1) { // 1 is OPEN
-        try {
-          clientWs.send(JSON.stringify(payload));
-        } catch (err) {
-          console.error("Failed to send message to client:", err);
-        }
-      }
-    }
-
-    let session: any = null;
-    let tEndPushToTalk: number | null = null;
-    let tFetchPayloadSent: number | null = null;
-    let tExecuteFinish: number | null = null;
-
-    let pendingExecution: { resolve: (res: any) => void, reject: (err: any) => void } | null = null;
-    let executionTimeout: NodeJS.Timeout | null = null;
-    let executionCommandId: string | null = null;
-
+  app.get("/api/get-token", async (req, res) => {
     try {
-      session = await ai.live.connect({
-        model: "gemini-3.1-flash-live-preview",
-        callbacks: {
-          onmessage: (message: LiveServerMessage) => {
-            try {
-              // Forward audio to frontend
-              const audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-              if (audio) {
-                safeClientSend({ type: "status", status: "speaking" });
-                safeClientSend({ type: "audio", audio });
-                
-                if (tExecuteFinish) {
-                   const tReceiveAudio = Date.now();
-                   const T3 = tReceiveAudio - tExecuteFinish;
-                   safeClientSend({ type: "latency", measure: "T3", ms: T3, description: "Execution Finish -> First valid Audio output" });
-                   tExecuteFinish = null; 
-                }
-              }
-              if (message.serverContent?.interrupted) {
-                safeClientSend({ type: "interrupted" });
-                safeClientSend({ type: "status", status: "idle" });
-              }
-              if (message.serverContent?.turnComplete) {
-                safeClientSend({ type: "status", status: "idle" });
-              }
-
-              // Output transcription
-              const text = message.serverContent?.outputTranscription?.text;
-              if (text) {
-                  safeClientSend({ type: "transcription", text, role: "agent" });
-              }
-              
-              // Input transcription
-              const userText = message.serverContent?.inputTranscription?.text;
-              if (userText) {
-                  safeClientSend({ type: "transcription", text: userText, role: "user" });
-              }
-
-              // Handle tools
-              if (message.toolCall) {
-                  const call = message.toolCall.functionCalls?.[0];
-                  if (call) {
-                      safeClientSend({ type: "log", message: `Tool invoked: ${call.name}` });
-                      
-                      if (call.name === "fetch_payload") {
-                          const tFetch = Date.now();
-                          if (tEndPushToTalk) {
-                              const T1 = tFetch - tEndPushToTalk;
-                              safeClientSend({ type: "latency", measure: "T1", ms: T1, description: "activityEnd -> Tool call: fetch_payload" });
-                          }
-                          
-                          // Extract thought_signature
-                          const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
-
-                          safeClientSend({ type: "status", status: "fetching_payload" });
-
-                          let contextualPayload = activePayload;
-                          if (terminalContext.length > 0) {
-                              contextualPayload += "\n\n=== RECENT TERMINAL LOGS ===\n" + terminalContext.slice(-5).join("\n---\n") + "\n============================\n";
-                          }
-
-                          const functionResponses = [{
-                              id: call.id,
-                              name: call.name,
-                              response: {
-                                  payload: contextualPayload,
-                                  thought_signature
-                              }
-                          }];
-                          session.sendToolResponse({ functionResponses });
-                          tFetchPayloadSent = Date.now();
-                          safeClientSend({ type: "log", message: `Payload injected, ID: ${thought_signature}` });
-                      } else if (call.name === "execute_code") {
-                          const tExecute = Date.now();
-                          if (tFetchPayloadSent) {
-                              const T2 = tExecute - tFetchPayloadSent;
-                              safeClientSend({ type: "latency", measure: "T2", ms: T2, description: "Payload Response -> Tool call: execute_code" });
-                          }
-                          
-                          const thought_signature = call.id || (call.args ? call.args.thought_signature as string : undefined) || "unknown";
-                          const command = (call.args?.command as string) || "echo no-op";
-                          safeClientSend({ type: "status", status: "executing_code", command });
-                          safeClientSend({ type: "log", message: `Executing code: ${command}` });
-                          
-                          const secureCommand = `export CI=true && ${command}`;
-                          const commandId = `cmd-${Date.now()}`;
-                          
-                          if (pendingExecution) {
-                              if (executionTimeout) clearTimeout(executionTimeout);
-                              pendingExecution.reject(new Error("Another command started before this one finished."));
-                          }
-
-                          executionCommandId = commandId;
-                          safeClientSend({ type: "webcontainer_execute", id: commandId, command: secureCommand });
-
-                          new Promise<any>((resolve, reject) => {
-                              pendingExecution = { resolve, reject };
-                              executionTimeout = setTimeout(() => {
-                                  if (pendingExecution && executionCommandId === commandId) {
-                                      pendingExecution.reject(new Error("WebContainer execution timed out after 30 seconds."));
-                                      pendingExecution = null;
-                                      executionCommandId = null;
-                                  }
-                              }, 30000); // 30 seconds timeout
-                          }).then((result: any) => {
-                              try {
-                                const functionResponses = [{
-                                    id: call.id,
-                                    name: call.name,
-                                    response: {
-                                        stdout: result.stdout || "",
-                                        stderr: result.stderr || "",
-                                        error: result.error || null,
-                                        exitCode: result.exitCode,
-                                        thought_signature
-                                    }
-                                }];
-                                session.sendToolResponse({ functionResponses });
-                                tExecuteFinish = Date.now();
-                                safeClientSend({ type: "log", message: `Execution completed.` });
-                                safeClientSend({ type: "execution_output", command, stdout: result.stdout || "", stderr: result.stderr || "", error: result.error || null });
-                              } catch (innerErr) {
-                                console.error("Error sending tool response:", innerErr);
-                              }
-                          }).catch((err: any) => {
-                              try {
-                                const functionResponses = [{
-                                    id: call.id,
-                                    name: call.name,
-                                    response: {
-                                        stdout: "",
-                                        stderr: err.message,
-                                        error: err.message,
-                                        exitCode: 1,
-                                        thought_signature
-                                    }
-                                }];
-                                session.sendToolResponse({ functionResponses });
-                                tExecuteFinish = Date.now();
-                                safeClientSend({ type: "log", message: `Execution failed: ${err.message}` });
-                              } catch (innerErr) {
-                                console.error("Error sending error response:", innerErr);
-                              }
-                          });
-                      }
-                  }
-              }
-            } catch (msgErr) {
-              console.error("Error handling message from Gemini:", msgErr);
-            }
-          },
-        },
-        config: {
-          responseModalities: [Modality.AUDIO],
-          systemInstruction: "You are an agent. When the user tells you they are ready and to fetch your payload, invoke fetch_payload(). Then, process the payload and immediately execute the instructions it gives you using execute_code(). Acknowledge back to the user when you're done.",
-          outputAudioTranscription: {},
-          realtimeInputConfig: {
-              automaticActivityDetection: { disabled: true }
-          },
-          tools: [{
-              functionDeclarations: [
-                  {
-                      name: "fetch_payload",
-                      description: "Fetches a massive text payload of system instructions after the user primes you.",
-                      parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                              thought_signature: {
-                                  type: Type.STRING,
-                                  description: "Optional random identifier."
-                              }
-                          }
-                      }
-                  },
-                  {
-                      name: "execute_code",
-                      description: "Executes real terminal commands on the host machine.",
-                      parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                              command: {
-                                  type: Type.STRING,
-                                  description: "The shell command to execute."
-                              }
-                          },
-                          required: ["command"]
-                      }
-                  }
-              ]
-          }]
-        },
-      });
-
-      clientWs.on("message", (data) => {
-        try {
-          const msg = JSON.parse(data.toString());
-          if (msg.event === "activityStart" && session) {
-              session.sendRealtimeInput({ activityStart: {} });
-              safeClientSend({ type: "log", message: "activityStart sent to model." });
-          } else if (msg.event === "activityEnd" && session) {
-              tEndPushToTalk = Date.now();
-              session.sendRealtimeInput({ activityEnd: {} });
-              safeClientSend({ type: "status", status: "processing" });
-              safeClientSend({ type: "log", message: "activityEnd sent to model." });
-          } else if (msg.type === "set_payload") {
-              activePayload = msg.payload;
-              safeClientSend({ type: "log", message: "Payload updated by user." });
-          } else if (msg.type === "webcontainer_execute_result") {
-              if (pendingExecution && executionCommandId === msg.commandId) {
-                  const { stdout, stderr, exitCode } = msg;
-                  const resultStr = `Command: ${msg.command}\nStdout: ${stdout || ""}\nStderr: ${stderr || ""}\nExitCode: ${exitCode}`;
-                  terminalContext.push(resultStr);
-                  
-                  if (executionTimeout) clearTimeout(executionTimeout);
-                  pendingExecution.resolve({ stdout, stderr, exitCode, error: null });
-                  pendingExecution = null;
-                  executionCommandId = null;
-              }
-          } else if (msg.audio && session) {
-              session.sendRealtimeInput({
-                audio: { data: msg.audio, mimeType: "audio/pcm;rate=16000" },
-              });
-          }
-        } catch (err) {
-          console.error("Error processing client message", err);
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1alpha/models/gemini-2.0-flash-exp:generateToken?key=${process.env.GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
         }
-      });
-      
-      clientWs.on("close", () => {
-          if (pendingExecution) {
-              if (executionTimeout) clearTimeout(executionTimeout);
-              pendingExecution.reject(new Error("Websocket client disconnected before command execution completed."));
-              pendingExecution = null;
-              executionCommandId = null;
-              safeClientSend({ type: "log", message: "Client disconnected, cancelling pending execution." });
-          }
-          if (session) {
-             // Cleanup
-          }
-      });
-
+      );
+      if (!response.ok) {
+        throw new Error(`Token API Error: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json();
+      res.json(data);
     } catch (err: any) {
-        console.error("Gemini session connection failed: ", err);
-        safeClientSend({ type: "error", message: err.message || JSON.stringify(err) });
+      console.error("Error generating token:", err);
+      res.status(500).json({ error: err.message });
     }
   });
 
