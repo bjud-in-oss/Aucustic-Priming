@@ -411,7 +411,7 @@ export default function App() {
         if (ws.readyState === WebSocket.OPEN) {
           const base64 = pcmToBase64(e.inputBuffer.getChannelData(0));
           const msg = {
-            realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: base64 }] }
+            realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: base64 } }
           };
           ws.send(JSON.stringify(msg));
         }
