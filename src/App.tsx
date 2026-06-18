@@ -549,6 +549,7 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(true);
     pushingRef.current = true;
+    wsRef.current.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume();
     }
@@ -558,8 +559,7 @@ export default function App() {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setPushing(false);
     pushingRef.current = false;
-    // Send turnComplete so the agent knows we stopped talking if VAD is slow
-    wsRef.current.send(JSON.stringify({ clientContent: { turnComplete: true } }));
+    wsRef.current.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
   }, []);
 
   useEffect(() => {

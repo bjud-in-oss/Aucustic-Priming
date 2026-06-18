@@ -102,7 +102,7 @@ async function startServer() {
   app.get("/api/get-token", async (req, res) => {
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1alpha/models/gemini-2.0-flash-exp:generateToken?key=${process.env.GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.1-flash-live-preview:generateToken?key=${process.env.GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" }
