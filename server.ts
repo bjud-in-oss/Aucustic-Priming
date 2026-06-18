@@ -100,24 +100,8 @@ async function startServer() {
 `;
 
   app.get("/api/get-token", async (req, res) => {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.1-flash-live-preview:generateToken?key=${process.env.GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" }
-        }
-      );
-      if (!response.ok) {
-        console.warn(`Token API Error: ${response.status} ${response.statusText}. Falling back to raw API Key.`);
-        return res.json({ token: process.env.GEMINI_API_KEY });
-      }
-      const data = await response.json();
-      res.json(data);
-    } catch (err: any) {
-      console.warn("Error generating token:", err.message, "- Falling back to raw API Key.");
-      res.json({ token: process.env.GEMINI_API_KEY });
-    }
+    // Return the raw API key directly as fallback since Ephemeral token generation is currently failing or unsupported for this model.
+    res.json({ token: process.env.GEMINI_API_KEY });
   });
 
   app.get("/api/workspace/list", async (req, res) => {
