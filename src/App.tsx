@@ -199,9 +199,7 @@ export default function App() {
       addLog("Token received. Connecting to Gemini Live API...");
 
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const isApiKey = !token.startsWith("ya29."); 
-      const authParam = isApiKey ? `key=${token}` : `bearer_token=${token}`;
-      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?${authParam}`);
+      const ws = new WebSocket(`wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${token}`);
       wsRef.current = ws;
 
       let pendingExecutionLocal: any = null;
@@ -212,7 +210,7 @@ export default function App() {
         
         const setupMessage = {
           setup: {
-            model: "models/gemini-2.0-flash-exp",
+            model: "models/gemini-3.1-flash-live-preview",
             systemInstruction: { parts: [{ text: "You are an agent. When the user tells you they are ready and to fetch your payload, invoke fetch_payload(). Then, process the payload and immediately execute the instructions it gives you using execute_code(). Acknowledge back to the user when you're done." }] },
             generationConfig: {
                responseModalities: ["AUDIO"],
